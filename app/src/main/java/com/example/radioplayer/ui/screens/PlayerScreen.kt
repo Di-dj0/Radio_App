@@ -9,7 +9,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -23,6 +22,11 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
 import com.example.radioplayer.viewmodel.RadioViewModel
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.window.Dialog
 
 
 @Composable
@@ -32,6 +36,9 @@ fun PlayerScreen(viewModel: RadioViewModel) {
     val trackTitle by viewModel.currentTrackTitle.collectAsState()
     val stationName by viewModel.stationName.collectAsState()
     val iconPath by viewModel.iconPath.collectAsState()
+    val availableStations by viewModel.availableStations.collectAsState()
+    var showStationsDialog by remember { mutableStateOf(false) }
+    val frequency by viewModel.frequency.collectAsState()
 
     val context = LocalContext.current
 
@@ -61,6 +68,7 @@ fun PlayerScreen(viewModel: RadioViewModel) {
                 contentScale = ContentScale.Fit,
                 modifier = Modifier
                     .size(250.dp)
+                    .clickable { showStationsDialog = true }
             )
         } else {
             // Se o logo não carregar, mostra uma bola cinza de placeholder
@@ -68,6 +76,7 @@ fun PlayerScreen(viewModel: RadioViewModel) {
                 modifier = Modifier
                     .size(250.dp)
                     .background(Color.DarkGray)
+                    .clickable { showStationsDialog = true }
             )
         }
 
@@ -94,8 +103,8 @@ fun PlayerScreen(viewModel: RadioViewModel) {
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "107.7 FM",
-            color = Color.Gray,
+            text = frequency,
+            color = Color.Yellow,
             fontSize = 14.sp
         )
 
@@ -133,6 +142,48 @@ fun PlayerScreen(viewModel: RadioViewModel) {
 
         }
 
+    }
+
+    if (showStationsDialog) {
+
+        Dialog(onDismissRequest = { showStationsDialog = false }) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
+                modifier = Modifier.fillMaxWidth().padding(24.dp)
+            ) {
+                Column(modifier = Modifier.padding(24.dp)) {
+                    Text(
+                        text = "Sintonizar Rádio",
+                        color = Color.Yellow,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    )
+
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        items(availableStations) { station ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        viewModel.switchStation(station.id)
+                                        showStationsDialog = false // Fecha o pop-up
+                                    }
+                                    .padding(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = station.name,
+                                    color = Color.White,
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
     }
 

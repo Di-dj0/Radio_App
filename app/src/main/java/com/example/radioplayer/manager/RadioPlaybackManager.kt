@@ -14,6 +14,19 @@ class RadioPlaybackManager(val station: RadioStation) {
 
     init {
         prepareNextSegment()
+
+        // Tuning effect: Pula aleatoriamente 1, 2 ou 3 passos na fila inicial
+        val stepsToSkip = (1..3).random()
+        repeat(stepsToSkip) {
+            if (playbackQueue.isNotEmpty()) {
+                playbackQueue.removeAt(0)
+            }
+        }
+
+        // Caso o pulo tenha limpado a fila inteira, gera o bloco seguinte imediatamente
+        if (playbackQueue.isEmpty()) {
+            prepareNextSegment()
+        }
     }
 
     fun getNextTrack(): AudioTrack {
@@ -40,7 +53,7 @@ class RadioPlaybackManager(val station: RadioStation) {
         }
 
         // ads have a 30% chance of playing
-        if (station.ads.isNotEmpty() && Random.nextFloat() < 0.5f) {
+        if (station.ads.isNotEmpty() && Random.nextFloat() < 0.3f) {
             playbackQueue.add(unplayedAds.removeAt(0))
             if (unplayedAds.isEmpty()) {
                 unplayedAds = station.ads.shuffled().toMutableList()
@@ -57,6 +70,14 @@ class RadioPlaybackManager(val station: RadioStation) {
             playbackQueue.add(unplayedMusic.removeAt(0))
         }
 
+    }
+
+    fun peekNextTrack(): AudioTrack {
+        if (playbackQueue.isEmpty()) {
+            prepareNextSegment()
+        }
+        // Retorna o primeiro item sem dar um .removeAt(0)
+        return playbackQueue.first()
     }
 
 }

@@ -14,6 +14,11 @@ import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import android.os.Bundle
+import androidx.media3.session.SessionCommand
+import com.example.radioplayer.models.RadioStation
+import com.example.radioplayer.manager.RadioStationFactory
+
 
 class RadioViewModel : ViewModel() {
 
@@ -32,6 +37,12 @@ class RadioViewModel : ViewModel() {
     private val _iconPath = MutableStateFlow<String?>(null)
     val iconPath = _iconPath.asStateFlow()
 
+    private val _availableStations = MutableStateFlow<List<RadioStation>>(emptyList())
+    val availableStations = _availableStations.asStateFlow()
+
+    private val _frequency = MutableStateFlow("Sintonizando...")
+    val frequency = _frequency.asStateFlow()
+
     fun initController(context: Context) {
         val sessionToken = SessionToken(context, ComponentName(context, RadioMediaService::class.java))
         controllerFuture = MediaController.Builder(context, sessionToken).buildAsync()
@@ -39,6 +50,8 @@ class RadioViewModel : ViewModel() {
         controllerFuture?.addListener({
             setupPlayerListener()
         }, MoreExecutors.directExecutor())
+
+        _availableStations.value = RadioStationFactory.getAllAvailableStations(context)
     }
 
     private fun setupPlayerListener() {
@@ -60,8 +73,16 @@ class RadioViewModel : ViewModel() {
 
                 _stationName.value = metadata.artist?.toString() ?: "Rádio"
                 _iconPath.value = metadata.artworkUri?.toString()
+
+                _frequency.value = metadata.subtitle?.toString() ?: "100.0 FM"
             }
         })
+    }
+
+    fun switchStation(stationId: String) {
+        val command = SessionCommand("SWITCH_STATION", Bundle.EMPTY)
+        val args = Bundle().apply { putString("STATION_ID", stationId) }
+        controller?.sendCustomCommand(command, args)
     }
 
     fun togglePlayPause() {

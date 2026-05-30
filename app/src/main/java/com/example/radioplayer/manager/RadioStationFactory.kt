@@ -5,6 +5,8 @@ import com.example.radioplayer.models.AudioTrack
 import com.example.radioplayer.models.AudioType
 import com.example.radioplayer.models.RadioStation
 import java.io.IOException
+import org.json.JSONObject
+import java.io.InputStreamReader
 
 object RadioStationFactory {
 
@@ -52,9 +54,32 @@ object RadioStationFactory {
                 )
             }
 
-            RadioStation(
+            // default names and frequency
+            var prettyName = folderName
+            var stationFrequency = "89.9 FM"
+
+            try {
+                val jsonStream = assetManager.open("$folderName/station_info.json")
+                val jsonString = jsonStream.bufferedReader().use { it.readText() }
+                val jsonObject = JSONObject(jsonString)
+
+                if (jsonObject.has("name")) {
+                    prettyName = jsonObject.getString("name")
+                }
+                if (jsonObject.has("frequency")) {
+                    stationFrequency = jsonObject.getString("frequency")
+                }
+            } catch (e: Exception) {
+                println("Aviso: station_info.json não encontrado em $folderName. Usando valores padrão.")
+                prettyName = folderName.split("_").joinToString(" ") { word ->
+                    word.replaceFirstChar { it.uppercase() }
+                }
+            }
+
+            return RadioStation(
                 id = folderName,
-                name = folderName,
+                name = prettyName,
+                frequency = stationFrequency,
                 iconPath = "$folderName/logo.png",
                 musicTracks = musicTracks,
                 djTalks = djTalks,
@@ -65,6 +90,24 @@ object RadioStationFactory {
             e.printStackTrace()
             null
         }
+    }
+
+    fun getAllAvailableStations(context: Context): List<RadioStation> {
+        val assetManager = context.assets
+        val stations = mutableListOf<RadioStation>()
+        try {
+            val rootItems = assetManager.list("") ?: emptyArray()
+
+            for (item in rootItems) {
+                val subItems = assetManager.list(item) ?: emptyArray()
+                if (subItems.contains("logo.png")) {
+                    createFromAssets(context, item)?.let { stations.add(it) }
+                }
+            }
+        } catch (e: IOException) {
+            e.printStackTrace()
+        }
+        return stations
     }
 
 }
