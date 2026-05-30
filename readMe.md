@@ -17,7 +17,7 @@ An immersive Android radio player application built with **Kotlin**, **Jetpack C
 
 ## 🏗️ Architecture & Code Structure
 
-The project follows clean architecture principles separating business logic from Android framework dependencies:
+The project follows architecture principles that separates business logic from Android framework dependencies:
 
 * **`models/`**: Pure data classes representing audio layers (`AudioType.kt`, `AudioTrack.kt`, `RadioStation.kt`).
 * **`manager/`**: The core behavioral engine.
@@ -54,7 +54,7 @@ Place your files inside the `app/src/main/assets/` folder precisely as shown bel
 
 ### 2. Station Configuration (station_info.json)
 
-Inside each station's root folder, create a station_info.json file. If omitted, the app will safely fallback to the formatted folder name and a default 89.9 FM frequency.
+Inside each station's root folder, create a station_info.json file. If omitted, the app will fallback to the formatted folder name (see older versions) and a default 89.9 FM frequency.
     
     {
       "name": "Radio Los Santos",
@@ -63,7 +63,7 @@ Inside each station's root folder, create a station_info.json file. If omitted, 
 
 ## 3. Crucial Naming Rules (snake_case)
 
-Android uses an underlying Unix-based URI file scheme. Characters like #, ?, &, ', ", brackets (), or spaces are reserved characters and will break file streaming.
+Android uses an underlying Unix-based URI file scheme, so characters like #, ?, &, ', ", brackets (), or spaces are reserved characters and will break file streaming.
 
     DO NOT USE uppercase letters, spaces, or symbols (#, ( ), ", ', accents) in audio files or station folder names.
 
@@ -84,3 +84,9 @@ Ensure your root .gitignore contains the following rule:
     # Exclude raw radio assets but keep the repository structure intact
     /app/src/main/assets/*
     !/app/src/main/assets/README.md
+
+## ⚡ Possible Future Implementations
+
+- I've been thinking about remaking the assets files to be able to select different game radios, such as Fallout, or even slip between GTA SA and GTA V for Radio Los Santos;
+- Probably will be changing the code for "general assets" to make it no required, but for now the noise and tuning files are deep integrated with the logic for nextSong();
+- Any new suggestion will be considered :D
