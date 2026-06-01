@@ -374,6 +374,12 @@ class RadioMediaService : MediaSessionService() {
         }
     }
 
+    override fun onTaskRemoved(rootIntent: android.content.Intent?) {
+        super.onTaskRemoved(rootIntent)
+        playerA?.stop()
+        playerB?.stop()
+        stopSelf()
+    }
     override fun onDestroy() {
         serviceScope.cancel()
         playerA?.release()
