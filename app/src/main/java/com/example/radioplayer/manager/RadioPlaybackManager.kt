@@ -15,8 +15,8 @@ class RadioPlaybackManager(val station: RadioStation) {
     init {
         prepareNextSegment()
 
-        // Tuning effect: Pula aleatoriamente 1, 2 ou 3 passos na fila inicial
-        val stepsToSkip = (1..3).random()
+        // Tuning effect: Pula aleatoriamente de 2 a 5 passos na fila inicial
+        val stepsToSkip = (2..5).random()
         repeat(stepsToSkip) {
             if (playbackQueue.isNotEmpty()) {
                 playbackQueue.removeAt(0)
@@ -37,7 +37,16 @@ class RadioPlaybackManager(val station: RadioStation) {
     }
 
     private fun prepareNextSegment() {
-        // Nova ordem: [Jingle] -> [DJ] -> [Propaganda (30%)] -> [Música]
+        // [DJ 1] -> [Jingle] -> [DJ 2] -> (30%)[Ad + DJ 3] -> [Música]
+        // 1. DJ de encerramento (50% de chance de aparecer no final da música)
+        if (station.djTalks.isNotEmpty() && Random.nextFloat() < 0.5f) {
+            playbackQueue.add(unplayedDjTalks.removeAt(0))
+            if (unplayedDjTalks.isEmpty()) {
+                unplayedDjTalks = station.djTalks.shuffled().toMutableList()
+            }
+        }
+
+        // 2. Vinheta / Jingle da rádio
         if (station.jingles.isNotEmpty()) {
             playbackQueue.add(unplayedJingles.removeAt(0))
             if (unplayedJingles.isEmpty()) {
@@ -45,6 +54,7 @@ class RadioPlaybackManager(val station: RadioStation) {
             }
         }
 
+        // 3. DJ de introdução (chama o próximo bloco)
         if (station.djTalks.isNotEmpty()) {
             playbackQueue.add(unplayedDjTalks.removeAt(0))
             if (unplayedDjTalks.isEmpty()) {
@@ -52,20 +62,27 @@ class RadioPlaybackManager(val station: RadioStation) {
             }
         }
 
-        // ads have a 30% chance of playing
+        // 4. Bloco de Comercial + DJ de Transição (30% de chance)
         if (station.ads.isNotEmpty() && Random.nextFloat() < 0.3f) {
+            // Comercial
             playbackQueue.add(unplayedAds.removeAt(0))
             if (unplayedAds.isEmpty()) {
                 unplayedAds = station.ads.shuffled().toMutableList()
             }
+
+            // DJ que fala em cima da música pós-comercial
+            if (station.djTalks.isNotEmpty()) {
+                playbackQueue.add(unplayedDjTalks.removeAt(0))
+                if (unplayedDjTalks.isEmpty()) {
+                    unplayedDjTalks = station.djTalks.shuffled().toMutableList()
+                }
+            }
         }
 
-        // if all musics have played
+        // 5. A nova música que vai rodar
         if (unplayedMusic.isEmpty()) {
             unplayedMusic = station.musicTracks.shuffled().toMutableList()
         }
-
-        // add music to queue
         if (unplayedMusic.isNotEmpty()) {
             playbackQueue.add(unplayedMusic.removeAt(0))
         }

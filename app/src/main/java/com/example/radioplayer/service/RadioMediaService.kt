@@ -28,6 +28,7 @@ import androidx.media3.common.ForwardingPlayer
 import com.example.radioplayer.ui.MainActivity
 import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
+import android.media.MediaMetadataRetriever
 
 class RadioMediaService : MediaSessionService() {
     // Dual Deck pra crossfade
@@ -44,6 +45,10 @@ class RadioMediaService : MediaSessionService() {
     private var isFirstTrackOfStation = false
     private var isTuningTransition = false
     private var pendingStationId: String? = null
+    private var isDjFollowingAd = false
+
+    private var fadeOutJobA: Job? = null
+    private var fadeOutJobB: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -233,35 +238,79 @@ class RadioMediaService : MediaSessionService() {
                     val timeLeft = player.duration - player.currentPosition
                     val mediaId = player.currentMediaItem?.mediaId ?: ""
 
+                    val nextTrack = playbackManager?.peekNextTrack()
+                    val nextIsMusic = nextTrack?.filePath?.contains("/music/") == true
+                    val nextIsDj = nextTrack?.filePath?.contains("/dj_talks/") == true
+                    val nextIsJingle = nextTrack?.filePath?.contains("/jingles/") == true
+
+                    // MÚSICA TOCANDO
                     if (mediaId.contains("_music_")) {
-                        if (timeLeft in 1..5000) {
-                            player.volume = (timeLeft / 5000f).coerceIn(0f, 1f)
-                            if (timeLeft <= 500) playNextTrack()
-                        }
-                    }
-                    else if (mediaId.contains("_dj_")) {
-                        val nextTrack = playbackManager?.peekNextTrack()
-                        val nextIsMusic = nextTrack?.filePath?.contains("/music/") == true
 
-                        if (nextIsMusic) {
-                            if (timeLeft in 1..2000) playNextTrack()
-                        } else {
-                            if (timeLeft in 1..500) playNextTrack()
-                        }
-                    }
-                    else if (isTuningTransition && mediaId.contains("general_tuning_")) {
-                        if (!player.hasNextMediaItem()) {
+                        if (nextIsDj) {
+                            // Caiu no sorteio de 50%: O DJ vai falar em cima da música
+                            val djDuration = getAssetDuration(nextTrack!!.filePath)
+                            val triggerTime = (djDuration + 2000L).coerceAtMost(15000L)
 
-                            if (timeLeft in 1..1250) {
-                                // Como o teto do volume da sintonia é 0.3f, a regra de três acompanha esse limite
-                                player.volume = (timeLeft / 1250f) * 0.3f
-
-                                // Faltando meio segundo pro chiado sumir, engatilha a rádio real (que já nasce com fade-in!)
-                                if (timeLeft <= 500) {
-                                    isTuningTransition = false
-                                    startPendingStation()
-                                }
+                            if (timeLeft in 1..triggerTime && timeLeft > triggerTime - 500) {
+                                startBackgroundFadeOut(player, triggerTime)
+                                playNextTrack()
                             }
+                        }
+                        else if (nextIsJingle) {
+                            // NÃO caiu no sorteio do DJ: A música cruza direto para a Vinheta
+                            // Fazemos um fade rápido de 2 segundos
+                            if (timeLeft in 1..2000 && timeLeft > 1500) {
+                                startBackgroundFadeOut(player, 2000L)
+                                playNextTrack()
+                            }
+                        }
+                        else {
+                            // Fallback de segurança
+                            if (timeLeft in 1..5000 && timeLeft > 4500) {
+                                startBackgroundFadeOut(player, 5000L)
+                                playNextTrack()
+                            }
+                        }
+                    }
+
+                    // DJ TOCANDO
+                    else if (mediaId.contains("_dj_")) {
+                        if (nextIsMusic) {
+                            // Se o próximo é música (caso sem comercial), entra cruzando 4s antes
+                            if (timeLeft in 1..4000 && timeLeft > 3500) {
+                                playNextTrack()
+                            }
+                        } else {
+                            // Se o próximo for vinheta ou comercial, o DJ fala até o fim seco
+                            if (timeLeft in 1..500 && timeLeft > 0) {
+                                playNextTrack()
+                            }
+                        }
+                    }
+
+                    // VINHETA (JINGLE) TOCANDO
+                    else if (mediaId.contains("_jingle")) {
+                        // Passa para o segundo DJ assim que a vinheta terminar
+                        if (timeLeft in 1..500 && timeLeft > 0) {
+                            playNextTrack()
+                        }
+                    }
+
+                    // COMERCIAL TOCANDO
+                    else if (mediaId.contains("_ads_")) {
+                        // Faltando 1 segundo: Dispara o DJ na pickup livre E a música por baixo imediatamente!
+                        if (timeLeft in 1..1000 && timeLeft > 500) {
+                            playNextTrack() // Carrega e liga o DJ (Pega o deck oposto)
+                            playNextTrack() // Carrega e liga a música em fade-in (Corta o resto do comercial)
+                        }
+                    }
+
+                    // EFEITO DE SINTONIZANDO
+                    else if (isTuningTransition && mediaId.contains("general_tuning")) {
+                        if (timeLeft in 1..1500 && timeLeft > 1250) {
+                            startBackgroundFadeOut(player, 1250L)
+                            isTuningTransition = false
+                            startPendingStation()
                         }
                     }
                 }
@@ -301,6 +350,10 @@ class RadioMediaService : MediaSessionService() {
 
         val nextPlayer = if (activePlayer == playerA) playerB else playerA
 
+        // tells the other pick to cancel the fadeout if the same one is responsible for multiple tracks
+        // (such as dj + jingle + dj)
+        if (nextPlayer == playerA) fadeOutJobA?.cancel() else fadeOutJobB?.cancel()
+
         if (isManualSkip) {
             fadeInJob?.cancel() // Cancela qualquer subida de volume antiga ativa
             activePlayer?.stop()
@@ -312,10 +365,21 @@ class RadioMediaService : MediaSessionService() {
 
         val isMusic = nextTrack.filePath.contains("/music/")
         val isAd = nextTrack.filePath.contains("/ads/")
+        val isJingle = nextTrack.filePath.contains("/jingles/")
+        val isDj = nextTrack.filePath.contains("/dj_talks/")
 
-        if ((isMusic && !wasLastTrackAd) || isFirstTrackOfStation || (isManualSkip && isMusic)) {
+        if (isDj && wasLastTrackAd) {
+            isDjFollowingAd = true
+        } else if (!isDj) {
+            isDjFollowingAd = false
+        }
+
+        if (isJingle) {
             nextPlayer?.volume = 0.0f
-            startFadeIn(nextPlayer)
+            startFadeIn(nextPlayer, 1500L)
+        } else if (isMusic || isFirstTrackOfStation || (isManualSkip && isMusic)) {
+            nextPlayer?.volume = 0.0f
+            startFadeIn(nextPlayer, 4000L)
         } else {
             fadeInJob?.cancel()
             nextPlayer?.volume = 1.0f
@@ -328,12 +392,11 @@ class RadioMediaService : MediaSessionService() {
         mediaSession?.player = getForwardingPlayer(activePlayer!!)
     }
 
-    private fun startFadeIn(targetPlayer: ExoPlayer?) {
+    private fun startFadeIn(targetPlayer: ExoPlayer?, durationMs: Long = 3000L) {
         fadeInJob?.cancel()
         fadeInJob = serviceScope.launch {
-            val fadeDuration = 3000L
             val steps = 30
-            val delayTime = fadeDuration / steps
+            val delayTime = durationMs / steps
             for (i in 1..steps) {
                 if (!isActive) break
                 targetPlayer?.volume = i.toFloat() / steps
@@ -371,6 +434,40 @@ class RadioMediaService : MediaSessionService() {
                     playNextTrack(isManualSkip = true)
                 }
             }
+        }
+    }
+
+    private fun getAssetDuration(filePath: String): Long {
+        return try {
+            val retriever = MediaMetadataRetriever()
+            val afd = assets.openFd(filePath)
+            retriever.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+            val timeString = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+            retriever.release()
+            afd.close()
+            timeString?.toLong() ?: 10000L
+        } catch (e: Exception) {
+            10000L
+        }
+    }
+
+    private fun startBackgroundFadeOut(backgroundPlayer: ExoPlayer?, durationMs: Long) {
+        val job = serviceScope.launch {
+            val steps = 50
+            val delayTime = durationMs / steps
+            for (i in steps downTo 0) {
+                if (!isActive) break
+                backgroundPlayer?.volume = i.toFloat() / steps
+                delay(delayTime)
+            }
+        }
+
+        if (backgroundPlayer == playerA) {
+            fadeOutJobA?.cancel() // Cancela qualquer outro que estivesse rodando
+            fadeOutJobA = job
+        } else {
+            fadeOutJobB?.cancel()
+            fadeOutJobB = job
         }
     }
 
