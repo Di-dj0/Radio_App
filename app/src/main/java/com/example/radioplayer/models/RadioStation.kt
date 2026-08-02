@@ -2,6 +2,7 @@ package com.example.radioplayer.models
 
 data class RadioStation(
     val id: String,
+    val gameFolder: String,
     val name: String,
     val frequency: String,
     val iconPath: String,

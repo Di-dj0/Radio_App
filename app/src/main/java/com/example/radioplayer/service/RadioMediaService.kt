@@ -29,11 +29,18 @@ import com.example.radioplayer.ui.MainActivity
 import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
 import android.media.MediaMetadataRetriever
+import kotlinx.coroutines.withContext
+import kotlin.random.Random
+import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.isActive
 
 class RadioMediaService : MediaSessionService() {
     // Dual Deck pra crossfade
     private var playerA: ExoPlayer? = null
     private var playerB: ExoPlayer? = null
+    private var playerStatic: ExoPlayer? = null
+    private var staticCrackleJob: Job? = null
+    private val staticBaseVolume = 0.05f
     private var activePlayer: ExoPlayer? = null
     private var mediaSession: MediaSession? = null
     private var playbackManager: RadioPlaybackManager? = null
@@ -41,11 +48,11 @@ class RadioMediaService : MediaSessionService() {
     private var fadeOutJob: Job? = null
     private var fadeInJob: Job? = null
     // Memória para saber se o último áudio foi um comercial
-    private var wasLastTrackAd = false
     private var isFirstTrackOfStation = false
     private var isTuningTransition = false
     private var pendingStationId: String? = null
-    private var isDjFollowingAd = false
+    private var currentGameFolder: String = ""
+    private var pendingGameFolder: String? = null
 
     private var fadeOutJobA: Job? = null
     private var fadeOutJobB: Job? = null
@@ -61,9 +68,11 @@ class RadioMediaService : MediaSessionService() {
             repeatMode = Player.REPEAT_MODE_OFF
             setHandleAudioBecomingNoisy(true)
         }
+        playerStatic = ExoPlayer.Builder(this).build().apply {
+            repeatMode = Player.REPEAT_MODE_ONE
+            volume = staticBaseVolume
+        }
         activePlayer = playerA
-
-
 
         val playerListener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -104,6 +113,15 @@ class RadioMediaService : MediaSessionService() {
                 // precisamos forçar a pickup do fundo a pausar também
                 if (!isPlaying) {
                     if (activePlayer == playerA) playerB?.pause() else playerA?.pause()
+                    playerStatic?.pause()
+                    staticCrackleJob?.cancel()
+                } else {
+                    if (playerStatic?.isPlaying == false) {
+                        playerStatic?.play()
+                    }
+                    if (staticCrackleJob?.isActive != true) {
+                        startStaticCrackleEffect()
+                    }
                 }
             }
 
@@ -126,7 +144,17 @@ class RadioMediaService : MediaSessionService() {
             .setSessionActivity(pendingIntent)
             .setCallback(mediaSessionCallback)
             .build()
-        val station = RadioStationFactory.createFromAssets(this, "k-dst")
+
+        val availableGames = RadioStationFactory.getAvailableGames(this)
+        currentGameFolder = availableGames.firstOrNull() ?: "GTA San Andreas"
+
+        val gameStations = RadioStationFactory.getAllAvailableStations(this, currentGameFolder)
+        val defaultStationId = gameStations.firstOrNull { it.id == "k-dst" }?.id
+            ?: gameStations.firstOrNull()?.id
+
+        val station = defaultStationId?.let {
+            RadioStationFactory.createFromAssets(this, currentGameFolder, it)
+        }
         if (station != null) {
             playbackManager = RadioPlaybackManager(station)
             isFirstTrackOfStation = true
@@ -134,10 +162,12 @@ class RadioMediaService : MediaSessionService() {
 
         playInitialStatic()
         startCrossfadeMonitor()
+        startPersistentStatic()
+        startStaticCrackleEffect()
     }
 
     private fun playInitialStatic() {
-        val assetUri = Uri.parse("file:///android_asset/general/ruido.mp3")
+        val assetUri = Uri.parse("file:///android_asset/$currentGameFolder/general/ruido.mp3")
         val metadata = MediaMetadata.Builder()
             .setTitle("Estação não sintonizada")
             .setArtist("Ruído Estático")
@@ -157,47 +187,114 @@ class RadioMediaService : MediaSessionService() {
         activePlayer?.play()
     }
 
+    private fun startPersistentStatic() {
+        val assetUri = Uri.parse("file:///android_asset/$currentGameFolder/general/ruido.mp3")
+        val mediaItem = MediaItem.Builder()
+            .setUri(assetUri)
+            .setMediaId("static_loop_persistent")
+            .build()
+
+        playerStatic?.setMediaItem(mediaItem)
+        playerStatic?.prepare()
+        playerStatic?.volume = staticBaseVolume
+        playerStatic?.play()
+    }
+
+    private fun startStaticCrackleEffect() {
+        staticCrackleJob?.cancel()
+        staticCrackleJob = serviceScope.launch {
+            while (isActive) {
+                // Espera aleatória entre "estalos" de estática
+                val waitMs = Random.nextLong(3000L, 12000L)
+                delay(waitMs)
+
+                // Pico de volume e durações de subida/descida aleatórias
+                val peakVolume = Random.nextFloat() * (0.65f - 0.30f) + 0.30f
+                val riseMs = Random.nextLong(120L, 220L)
+                val fallMs = Random.nextLong(220L, 350L)
+                // Pequena chance de segurar o pico por um instante antes de descer
+                val holdMs = if (Random.nextFloat() < 0.25f) Random.nextLong(50L, 150L) else 0L
+
+                fadeStaticVolume(from = staticBaseVolume, to = peakVolume, durationMs = riseMs)
+                if (holdMs > 0) delay(holdMs)
+                fadeStaticVolume(from = peakVolume, to = staticBaseVolume, durationMs = fallMs)
+            }
+        }
+    }
+
+    private suspend fun fadeStaticVolume(from: Float, to: Float, durationMs: Long) {
+        val steps = 20
+        val stepDelay = (durationMs / steps).coerceAtLeast(1L)
+        for (i in 0..steps) {
+            if (!coroutineContext.isActive) return
+            val fraction = i.toFloat() / steps
+            playerStatic?.volume = from + (to - from) * fraction
+            delay(stepDelay)
+        }
+        playerStatic?.volume = to
+    }
+
     private val mediaSessionCallback = object : MediaSession.Callback {
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
             val connectionResult = super.onConnect(session, controller)
             val availableCommands = connectionResult.availableSessionCommands.buildUpon()
                 .add(SessionCommand("SWITCH_STATION", Bundle.EMPTY))
+                .add(SessionCommand("SWITCH_GAME", Bundle.EMPTY))
+                .add(SessionCommand("SKIP_NEXT", Bundle.EMPTY))
                 .build()
             return MediaSession.ConnectionResult.accept(availableCommands, connectionResult.availablePlayerCommands)
         }
 
         override fun onCustomCommand(session: MediaSession, controller: MediaSession.ControllerInfo, customCommand: SessionCommand, args: Bundle): ListenableFuture<SessionResult> {
-            if (customCommand.customAction == "SWITCH_STATION") {
-                val stationId = args.getString("STATION_ID")
-                if (stationId != null) {
-                    // Guarda qual rádio o usuário quer para ligar depois do efeito
-                    pendingStationId = stationId
-                    isTuningTransition = true
-
-                    // Desliga o loop de chiado e limpa os decks
-                    playerA?.repeatMode = Player.REPEAT_MODE_OFF
-                    playerB?.repeatMode = Player.REPEAT_MODE_OFF
-                    playerA?.stop()
-                    playerB?.stop()
-                    playerA?.clearMediaItems()
-                    playerB?.clearMediaItems()
-
-                    // Abaixa o volume dos efeitos de sintonia para não estourar os ouvidos (ex: 30%)
-                    playerA?.volume = 0.15f
-                    playerB?.volume = 0.15f
-
-                    // Dispara a playlist sequencial aleatória dos efeitos de sintonia
-                    playTuningEffects()
+            when (customCommand.customAction) {
+                "SWITCH_STATION" -> {
+                    val stationId = args.getString("STATION_ID")
+                    if (stationId != null) {
+                        pendingStationId = stationId
+                        pendingGameFolder = null
+                        triggerTuningTransition()
+                    }
                 }
-                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                "SWITCH_GAME" -> {
+                    val gameFolder = args.getString("GAME_FOLDER")
+                    if (gameFolder != null && gameFolder != currentGameFolder) {
+                        pendingGameFolder = gameFolder
+                        pendingStationId = null
+                        triggerTuningTransition()
+                    }
+                }
+                "SKIP_NEXT" -> {
+                    if (!isTuningTransition && playbackManager != null) {
+                        playNextTrack(isManualSkip = true)
+                    }
+                }
             }
-            return super.onCustomCommand(session, controller, customCommand, args)
+            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+        }
+
+        private fun triggerTuningTransition() {
+            isTuningTransition = true
+
+            playerA?.repeatMode = Player.REPEAT_MODE_OFF
+            playerB?.repeatMode = Player.REPEAT_MODE_OFF
+            playerA?.stop()
+            playerB?.stop()
+            playerA?.clearMediaItems()
+            playerB?.clearMediaItems()
+
+            playerA?.volume = 0.15f
+            playerB?.volume = 0.15f
+
+            playTuningEffects()
         }
     }
 
     private fun playTuningEffects() {
         // Embaralha a ordem de sintonizando1 e sintonizando2
-        val fxSequence = listOf("general/sintonizando1.mp3", "general/sintonizando2.mp3").shuffled()
+        val fxSequence = listOf(
+            "$currentGameFolder/general/sintonizando1.mp3",
+            "$currentGameFolder/general/sintonizando2.mp3"
+        ).shuffled()
 
         val mediaItems = fxSequence.mapIndexed { index, path ->
             MediaItem.Builder()
@@ -220,13 +317,24 @@ class RadioMediaService : MediaSessionService() {
     }
 
     private fun startPendingStation() {
-        val stationId = pendingStationId ?: return
-        val newStation = RadioStationFactory.createFromAssets(this, stationId)
+        val targetGameFolder = pendingGameFolder ?: currentGameFolder
+        val gameStations = RadioStationFactory.getAllAvailableStations(this, targetGameFolder)
+
+        val stationId = pendingStationId
+            ?: gameStations.firstOrNull { it.id == "k-dst" }?.id
+            ?: gameStations.firstOrNull()?.id
+            ?: run { pendingGameFolder = null; pendingStationId = null; return }
+
+        val newStation = RadioStationFactory.createFromAssets(this, targetGameFolder, stationId)
         if (newStation != null) {
+            currentGameFolder = targetGameFolder
             playbackManager = RadioPlaybackManager(newStation)
             isFirstTrackOfStation = true
             playNextTrack()
         }
+
+        pendingGameFolder = null
+        pendingStationId = null
     }
 
     private fun startCrossfadeMonitor() {
@@ -258,16 +366,17 @@ class RadioMediaService : MediaSessionService() {
                         }
                         else if (nextIsJingle) {
                             // NÃO caiu no sorteio do DJ: A música cruza direto para a Vinheta
-                            // Fazemos um fade rápido de 2 segundos
-                            if (timeLeft in 1..2000 && timeLeft > 1500) {
-                                startBackgroundFadeOut(player, 2000L)
+                            val jingleFadeMs = Random.nextLong(1700L, 2400L)
+                            if (timeLeft in 1..jingleFadeMs && timeLeft > jingleFadeMs - 500) {
+                                startBackgroundFadeOut(player, jingleFadeMs)
                                 playNextTrack()
                             }
                         }
                         else {
                             // Fallback de segurança
-                            if (timeLeft in 1..5000 && timeLeft > 4500) {
-                                startBackgroundFadeOut(player, 5000L)
+                            val fallbackFadeMs = Random.nextLong(4500L, 5500L)
+                            if (timeLeft in 1..fallbackFadeMs && timeLeft > fallbackFadeMs - 500) {
+                                startBackgroundFadeOut(player, fallbackFadeMs)
                                 playNextTrack()
                             }
                         }
@@ -297,7 +406,7 @@ class RadioMediaService : MediaSessionService() {
                     }
 
                     // COMERCIAL TOCANDO
-                    else if (mediaId.contains("_ads_")) {
+                    else if (mediaId.contains("_ad_")) {
                         // Faltando 1 segundo: Dispara o DJ na pickup livre E a música por baixo imediatamente!
                         if (timeLeft in 1..1000 && timeLeft > 500) {
                             playNextTrack() // Carrega e liga o DJ (Pega o deck oposto)
@@ -333,13 +442,16 @@ class RadioMediaService : MediaSessionService() {
 
         val assetUri = Uri.parse("file:///android_asset/${nextTrack.filePath}")
 
+        val extras = Bundle().apply {
+            putString("icon_path", station?.iconPath)
+        }
+
         val metadata = MediaMetadata.Builder()
             .setTitle(nextTrack.title)
             .setArtist(station?.name)
             .setSubtitle(station?.frequency)
-            .setArtworkUri(Uri.parse(station?.iconPath))
-            // Usa o ByteArray em vez do Uri para garantir que a imagem apareça no sistema
             .setArtworkData(artworkData, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+            .setExtras(extras)
             .build()
 
         val mediaItem = MediaItem.Builder()
@@ -368,12 +480,6 @@ class RadioMediaService : MediaSessionService() {
         val isJingle = nextTrack.filePath.contains("/jingles/")
         val isDj = nextTrack.filePath.contains("/dj_talks/")
 
-        if (isDj && wasLastTrackAd) {
-            isDjFollowingAd = true
-        } else if (!isDj) {
-            isDjFollowingAd = false
-        }
-
         if (isJingle) {
             nextPlayer?.volume = 0.0f
             startFadeIn(nextPlayer, 1500L)
@@ -385,7 +491,6 @@ class RadioMediaService : MediaSessionService() {
             nextPlayer?.volume = 1.0f
         }
 
-        wasLastTrackAd = isAd
         nextPlayer?.play()
 
         activePlayer = nextPlayer
@@ -437,8 +542,8 @@ class RadioMediaService : MediaSessionService() {
         }
     }
 
-    private fun getAssetDuration(filePath: String): Long {
-        return try {
+    private suspend fun getAssetDuration(filePath: String): Long = withContext(Dispatchers.IO) {
+        try {
             val retriever = MediaMetadataRetriever()
             val afd = assets.openFd(filePath)
             retriever.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
@@ -475,12 +580,15 @@ class RadioMediaService : MediaSessionService() {
         super.onTaskRemoved(rootIntent)
         playerA?.stop()
         playerB?.stop()
+        playerStatic?.stop()
         stopSelf()
     }
     override fun onDestroy() {
+        staticCrackleJob?.cancel()
         serviceScope.cancel()
         playerA?.release()
         playerB?.release()
+        playerStatic?.release()
         mediaSession?.release()
         super.onDestroy()
     }

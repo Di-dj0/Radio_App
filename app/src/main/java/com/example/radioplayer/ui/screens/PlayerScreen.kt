@@ -40,6 +40,7 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.text.TextStyle
 import com.example.radioplayer.R
 import androidx.compose.foundation.border
+import androidx.compose.material.icons.filled.ArrowDropDown
 
 val pricedownFont = FontFamily(Font(R.font.pricedown))
 
@@ -164,7 +165,10 @@ fun PlayerScreen(viewModel: RadioViewModel) {
     val stationName by viewModel.stationName.collectAsState()
     val iconPath by viewModel.iconPath.collectAsState()
     val availableStations by viewModel.availableStations.collectAsState()
+    val availableGames by viewModel.availableGames.collectAsState()
+    val selectedGame by viewModel.selectedGame.collectAsState()
     var showStationsDialog by remember { mutableStateOf(false) }
+    var showGameDropdown by remember { mutableStateOf(false) }
     val frequency by viewModel.frequency.collectAsState()
     var dominantColor by remember { mutableStateOf(Color(0xFF121212)) }
 
@@ -210,96 +214,137 @@ fun PlayerScreen(viewModel: RadioViewModel) {
             .fillMaxSize()
             .background(animatedBackgroundColor)
             .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
 
-        if (bitmap != null) {
-            Image(
-                bitmap = bitmap,
-                contentDescription = "Logo da $stationName",
-                contentScale = ContentScale.Fit,
-                modifier = Modifier
-                    .size(250.dp)
-                    .clickable { showStationsDialog = true }
-            )
-        } else {
+        if (availableGames.size > 1) {
             Box(
                 modifier = Modifier
-                    .size(250.dp)
-                    .background(Color.DarkGray)
-                    .clickable { showStationsDialog = true }
-            )
+                    .fillMaxWidth()
+                    .padding(bottom = 16.dp),
+                contentAlignment = Alignment.TopCenter
+            ) {
+                OutlinedButton(onClick = { showGameDropdown = true }) {
+                    Text(text = selectedGame)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        imageVector = androidx.compose.material.icons.Icons.Filled.ArrowDropDown,
+                        contentDescription = "Selecionar jogo"
+                    )
+                }
+
+                DropdownMenu(
+                    expanded = showGameDropdown,
+                    onDismissRequest = { showGameDropdown = false }
+                ) {
+                    availableGames.forEach { game ->
+                        DropdownMenuItem(
+                            text = { Text(game) },
+                            onClick = {
+                                viewModel.switchGame(game)
+                                showGameDropdown = false
+                            }
+                        )
+                    }
+                }
+            }
         }
 
-        Spacer(modifier = Modifier.height(48.dp))
-
-        GtaText(
-            text = stationName,
-            fillColor = Color.White,
-            fontSize = 46.sp,
-            strokeWidth = 14f
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        GtaText(
-            text = trackTitle,
-            fillColor = Color(0xFFFFD700),
-            fontSize = 28.sp,
-            strokeWidth = 10f
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        GtaText(
-            text = frequency,
-            fillColor = Color(0xFFFFB300),
-            fontSize = 22.sp,
-            strokeWidth = 8f
-        )
-
-        Spacer(modifier = Modifier.height(48.dp))
-
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(32.dp)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
-            // BOTÃO DE PLAY / PAUSE
-            Button(
-                onClick = { viewModel.togglePlayPause() },
-                modifier = Modifier
-                    .size(80.dp)
-                    // ✨ REDUZIDO: Borda de 4.dp (Padrão era 6.dp)
-                    .border(width = 4.dp, color = Color.Black, shape = CircleShape),
-                shape = CircleShape,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFD700)), // Amarelo GTA
-                contentPadding = PaddingValues(0.dp)
-            ) {
-                Icon(
-                    imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    contentDescription = if (isPlaying) "Pausar" else "Tocar",
-                    tint = Color.Black,
-                    modifier = Modifier.size(46.dp)
+
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap,
+                    contentDescription = "Logo da $stationName",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .size(250.dp)
+                        .clickable { showStationsDialog = true }
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(250.dp)
+                        .background(Color.DarkGray)
+                        .clickable { showStationsDialog = true }
                 )
             }
 
-            // BOTÃO DE AVANÇAR (SKIP NEXT)
-            IconButton(
-                onClick = { viewModel.skipNext() },
-                modifier = Modifier.size(64.dp)
+            Spacer(modifier = Modifier.height(48.dp))
+
+            GtaText(
+                text = stationName,
+                fillColor = Color.White,
+                fontSize = 46.sp,
+                strokeWidth = 14f
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            GtaText(
+                text = trackTitle,
+                fillColor = Color(0xFFFFD700),
+                fontSize = 28.sp,
+                strokeWidth = 10f
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            GtaText(
+                text = frequency,
+                fillColor = Color(0xFFFFB300),
+                fontSize = 22.sp,
+                strokeWidth = 8f
+            )
+
+            Spacer(modifier = Modifier.height(48.dp))
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(32.dp)
             ) {
-                // ✨ USANDO O NOVO ÍCONE DE CANVAS PERFEITAMENTE ALINHADO
-                GtaCanvasSkipNextIcon(
-                    contentDescription = "Avançar",
-                    iconSize = 48.dp,
-                    fillColor = Color(0xFFFFD700),
-                    // ✨ Borda fina e precisa
-                    outlineStrokeWidth = 8.dp
-                )
+                // BOTÃO DE PLAY / PAUSE
+                Button(
+                    onClick = { viewModel.togglePlayPause() },
+                    modifier = Modifier
+                        .size(80.dp)
+                        // ✨ REDUZIDO: Borda de 4.dp (Padrão era 6.dp)
+                        .border(width = 4.dp, color = Color.Black, shape = CircleShape),
+                    shape = CircleShape,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFD700)), // Amarelo GTA
+                    contentPadding = PaddingValues(0.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        contentDescription = if (isPlaying) "Pausar" else "Tocar",
+                        tint = Color.Black,
+                        modifier = Modifier.size(46.dp)
+                    )
+                }
+
+                // BOTÃO DE AVANÇAR (SKIP NEXT)
+                IconButton(
+                    onClick = { viewModel.skipNext() },
+                    modifier = Modifier.size(64.dp)
+                ) {
+                    // ✨ USANDO O NOVO ÍCONE DE CANVAS PERFEITAMENTE ALINHADO
+                    GtaCanvasSkipNextIcon(
+                        contentDescription = "Avançar",
+                        iconSize = 48.dp,
+                        fillColor = Color(0xFFFFD700),
+                        // ✨ Borda fina e precisa
+                        outlineStrokeWidth = 8.dp
+                    )
+                }
             }
+
         }
-
     }
 
     if (showStationsDialog) {

@@ -24,6 +24,7 @@ class RadioViewModel : ViewModel() {
 
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private val controller: MediaController? get() = if (controllerFuture?.isDone == true) controllerFuture?.get() else null
+    private var appContext: Context? = null
 
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying = _isPlaying.asStateFlow()
@@ -40,10 +41,18 @@ class RadioViewModel : ViewModel() {
     private val _availableStations = MutableStateFlow<List<RadioStation>>(emptyList())
     val availableStations = _availableStations.asStateFlow()
 
+    private val _availableGames = MutableStateFlow<List<String>>(emptyList())
+    val availableGames = _availableGames.asStateFlow()
+
+    private val _selectedGame = MutableStateFlow("")
+    val selectedGame = _selectedGame.asStateFlow()
+
     private val _frequency = MutableStateFlow("Sintonizando...")
     val frequency = _frequency.asStateFlow()
 
     fun initController(context: Context) {
+        appContext = context.applicationContext
+
         val sessionToken = SessionToken(context, ComponentName(context, RadioMediaService::class.java))
         controllerFuture = MediaController.Builder(context, sessionToken).buildAsync()
 
@@ -51,7 +60,16 @@ class RadioViewModel : ViewModel() {
             setupPlayerListener()
         }, MoreExecutors.directExecutor())
 
-        _availableStations.value = RadioStationFactory.getAllAvailableStations(context)
+        val games = RadioStationFactory.getAvailableGames(context)
+        _availableGames.value = games
+
+        val defaultGame = games.firstOrNull() ?: ""
+        _selectedGame.value = defaultGame
+        _availableStations.value = if (defaultGame.isNotEmpty()) {
+            RadioStationFactory.getAllAvailableStations(context, defaultGame)
+        } else {
+            emptyList()
+        }
     }
 
     private fun setupPlayerListener() {
@@ -61,7 +79,7 @@ class RadioViewModel : ViewModel() {
         _currentTrackTitle.value = player.mediaMetadata.title?.toString() ?: "Sintonizando..."
 
         _stationName.value = player.mediaMetadata.artist?.toString() ?: "Sintonizando..."
-        _iconPath.value = player.mediaMetadata.artworkUri?.toString()
+        _iconPath.value = player.mediaMetadata.extras?.getString("icon_path")
 
         player.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -72,11 +90,24 @@ class RadioViewModel : ViewModel() {
                 _currentTrackTitle.value = metadata.title?.toString() ?: "Sintonizando"
 
                 _stationName.value = metadata.artist?.toString() ?: "Rádio"
-                _iconPath.value = metadata.artworkUri?.toString()
+                _iconPath.value = metadata.extras?.getString("icon_path")
 
                 _frequency.value = metadata.subtitle?.toString() ?: "100.0 FM"
             }
         })
+    }
+
+    fun switchGame(gameFolder: String) {
+        if (gameFolder == _selectedGame.value) return
+
+        _selectedGame.value = gameFolder
+        appContext?.let { ctx ->
+            _availableStations.value = RadioStationFactory.getAllAvailableStations(ctx, gameFolder)
+        }
+
+        val command = SessionCommand("SWITCH_GAME", Bundle.EMPTY)
+        val args = Bundle().apply { putString("GAME_FOLDER", gameFolder) }
+        controller?.sendCustomCommand(command, args)
     }
 
     fun switchStation(stationId: String) {
@@ -91,10 +122,8 @@ class RadioViewModel : ViewModel() {
     }
 
     fun skipNext() {
-        val player = controller ?: return
-        if (player.duration > 0) {
-            player.seekTo(player.duration)
-        }
+        val command = SessionCommand("SKIP_NEXT", Bundle.EMPTY)
+        controller?.sendCustomCommand(command, Bundle.EMPTY)
     }
 
     override fun onCleared() {

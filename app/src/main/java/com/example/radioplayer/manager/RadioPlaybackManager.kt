@@ -16,7 +16,7 @@ class RadioPlaybackManager(val station: RadioStation) {
         prepareNextSegment()
 
         // Tuning effect: Pula aleatoriamente de 2 a 5 passos na fila inicial
-        val stepsToSkip = (2..5).random()
+        val stepsToSkip = Random.nextInt(1, 7) // 1 a 6 passos, mais variação na sintonia
         repeat(stepsToSkip) {
             if (playbackQueue.isNotEmpty()) {
                 playbackQueue.removeAt(0)
@@ -33,13 +33,19 @@ class RadioPlaybackManager(val station: RadioStation) {
         if (playbackQueue.isEmpty()) {
             prepareNextSegment()
         }
+        check(playbackQueue.isNotEmpty()) {
+            "Station '${station.name}' has no audio tracks to play."
+        }
         return playbackQueue.removeAt(0)
     }
 
     private fun prepareNextSegment() {
         // [DJ 1] -> [Jingle] -> [DJ 2] -> (30%)[Ad + DJ 3] -> [Música]
         // 1. DJ de encerramento (50% de chance de aparecer no final da música)
-        if (station.djTalks.isNotEmpty() && Random.nextFloat() < 0.5f) {
+        val djClosingChance = Random.nextFloat() * 0.20f + 0.40f   // 40%–60%
+        val adChance = Random.nextFloat() * 0.15f + 0.225f          // 22.5%–37.5%
+
+        if (station.djTalks.isNotEmpty() && Random.nextFloat() < djClosingChance) {
             playbackQueue.add(unplayedDjTalks.removeAt(0))
             if (unplayedDjTalks.isEmpty()) {
                 unplayedDjTalks = station.djTalks.shuffled().toMutableList()
@@ -63,7 +69,7 @@ class RadioPlaybackManager(val station: RadioStation) {
         }
 
         // 4. Bloco de Comercial + DJ de Transição (30% de chance)
-        if (station.ads.isNotEmpty() && Random.nextFloat() < 0.3f) {
+        if (station.ads.isNotEmpty() && Random.nextFloat() < adChance) {
             // Comercial
             playbackQueue.add(unplayedAds.removeAt(0))
             if (unplayedAds.isEmpty()) {
@@ -92,6 +98,9 @@ class RadioPlaybackManager(val station: RadioStation) {
     fun peekNextTrack(): AudioTrack {
         if (playbackQueue.isEmpty()) {
             prepareNextSegment()
+        }
+        check(playbackQueue.isNotEmpty()) {
+            "Station '${station.name}' has no audio tracks to play."
         }
         // Retorna o primeiro item sem dar um .removeAt(0)
         return playbackQueue.first()
