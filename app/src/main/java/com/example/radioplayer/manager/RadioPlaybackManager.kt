@@ -40,12 +40,16 @@ class RadioPlaybackManager(val station: RadioStation) {
     }
 
     private fun prepareNextSegment() {
-        // [DJ 1] -> [Jingle] -> [DJ 2] -> (30%)[Ad + DJ 3] -> [Música]
-        // 1. DJ de encerramento (50% de chance de aparecer no final da música)
+        // [DJ 1] -> [Jingle] -> [DJ 2] -> (~30%)[Ad + DJ 3] -> [Música]
+        // Odds recebem um jitter aleatório a cada bloco para variar o ritmo
         val djClosingChance = Random.nextFloat() * 0.20f + 0.40f   // 40%–60%
         val adChance = Random.nextFloat() * 0.15f + 0.225f          // 22.5%–37.5%
+        val stationHasJingles = station.jingles.isNotEmpty()
 
-        if (station.djTalks.isNotEmpty() && Random.nextFloat() < djClosingChance) {
+        // 1. DJ de encerramento
+        // Só entra se a rádio tiver jingle disponível: sem jingle, este DJ ficaria
+        // colado direto no DJ de introdução (2 arquivos do mesmo tipo em sequência).
+        if (stationHasJingles && station.djTalks.isNotEmpty() && Random.nextFloat() < djClosingChance) {
             playbackQueue.add(unplayedDjTalks.removeAt(0))
             if (unplayedDjTalks.isEmpty()) {
                 unplayedDjTalks = station.djTalks.shuffled().toMutableList()
@@ -53,7 +57,7 @@ class RadioPlaybackManager(val station: RadioStation) {
         }
 
         // 2. Vinheta / Jingle da rádio
-        if (station.jingles.isNotEmpty()) {
+        if (stationHasJingles) {
             playbackQueue.add(unplayedJingles.removeAt(0))
             if (unplayedJingles.isEmpty()) {
                 unplayedJingles = station.jingles.shuffled().toMutableList()
