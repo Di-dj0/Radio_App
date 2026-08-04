@@ -36,7 +36,7 @@ object RadioStationFactory {
                         type = AudioType.MUSIC
                     )
                 } else {
-                    // Não tem extensão de áudio -> é uma pasta = música especial
+                    // Sem extensão de áudio -> é uma pasta = música especial (intro/mid/outro)
                     buildSpecialTrack(assetManager, idPrefix, basePath, itemName)
                 }
             }
@@ -68,6 +68,7 @@ object RadioStationFactory {
                 )
             }
 
+            // default names and frequency
             var prettyName = stationFolder
             var stationFrequency = "89.9 FM"
 
