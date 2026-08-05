@@ -50,6 +50,9 @@ class RadioViewModel : ViewModel() {
     private val _frequency = MutableStateFlow("Sintonizando...")
     val frequency = _frequency.asStateFlow()
 
+    private val _isStaticEnabled = MutableStateFlow(true)
+    val isStaticEnabled = _isStaticEnabled.asStateFlow()
+
     fun initController(context: Context) {
         appContext = context.applicationContext
 
@@ -113,6 +116,15 @@ class RadioViewModel : ViewModel() {
     fun switchStation(stationId: String) {
         val command = SessionCommand("SWITCH_STATION", Bundle.EMPTY)
         val args = Bundle().apply { putString("STATION_ID", stationId) }
+        controller?.sendCustomCommand(command, args)
+    }
+
+    fun toggleStatic() {
+        val newValue = !_isStaticEnabled.value
+        _isStaticEnabled.value = newValue
+
+        val command = SessionCommand("SET_STATIC_ENABLED", Bundle.EMPTY)
+        val args = Bundle().apply { putBoolean("ENABLED", newValue) }
         controller?.sendCustomCommand(command, args)
     }
 

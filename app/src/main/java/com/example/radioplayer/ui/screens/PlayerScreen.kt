@@ -41,6 +41,7 @@ import androidx.compose.ui.text.TextStyle
 import com.example.radioplayer.R
 import androidx.compose.foundation.border
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.GraphicEq
 
 val pricedownFont = FontFamily(Font(R.font.pricedown))
 
@@ -170,6 +171,7 @@ fun PlayerScreen(viewModel: RadioViewModel) {
     var showStationsDialog by remember { mutableStateOf(false) }
     var showGameDropdown by remember { mutableStateOf(false) }
     val frequency by viewModel.frequency.collectAsState()
+    val isStaticEnabled by viewModel.isStaticEnabled.collectAsState()
     var dominantColor by remember { mutableStateOf(Color(0xFF121212)) }
 
     val context = LocalContext.current
@@ -309,6 +311,26 @@ fun PlayerScreen(viewModel: RadioViewModel) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(32.dp)
             ) {
+                // BOTÃO DE RUÍDO ESTÁTICO (LIGA/DESLIGA)
+                Box(
+                    modifier = Modifier
+                        .size(64.dp)
+                        .border(width = 4.dp, color = Color.Black, shape = CircleShape)
+                        .background(
+                            color = if (isStaticEnabled) Color(0xFFFFD700) else Color(0xFF2A2A2A),
+                            shape = CircleShape
+                        )
+                        .clickable { viewModel.toggleStatic() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = androidx.compose.material.icons.Icons.Filled.GraphicEq,
+                        contentDescription = if (isStaticEnabled) "Desligar ruído estático" else "Ligar ruído estático",
+                        tint = if (isStaticEnabled) Color.Black else Color(0xFFFFD700),
+                        modifier = Modifier.size(34.dp)
+                    )
+                }
+
                 // BOTÃO DE PLAY / PAUSE
                 Button(
                     onClick = { viewModel.togglePlayPause() },

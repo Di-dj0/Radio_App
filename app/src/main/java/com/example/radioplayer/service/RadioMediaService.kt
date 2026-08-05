@@ -55,6 +55,7 @@ class RadioMediaService : MediaSessionService() {
     private var fadeOutJobB: Job? = null
     private var isDjFollowingAd = false
     private val specialBlendAfterAdMs = 2000L
+    private var isStaticEnabled = true
 
     override fun onCreate() {
         super.onCreate()
@@ -165,11 +166,13 @@ class RadioMediaService : MediaSessionService() {
                     playerStatic?.pause()
                     staticCrackleJob?.cancel()
                 } else {
-                    if (playerStatic?.isPlaying == false) {
-                        playerStatic?.play()
-                    }
-                    if (staticCrackleJob?.isActive != true) {
-                        startStaticCrackleEffect()
+                    if (isStaticEnabled) {
+                        if (playerStatic?.isPlaying == false) {
+                            playerStatic?.play()
+                        }
+                        if (staticCrackleJob?.isActive != true) {
+                            startStaticCrackleEffect()
+                        }
                     }
                 }
             }
@@ -243,6 +246,29 @@ class RadioMediaService : MediaSessionService() {
         }
     }
 
+    private fun setStaticEnabled(enabled: Boolean) {
+        if (enabled == isStaticEnabled) return
+        isStaticEnabled = enabled
+
+        if (enabled) {
+            if (playerStatic?.isPlaying == false) {
+                playerStatic?.play()
+            }
+            if (staticCrackleJob?.isActive != true) {
+                startStaticCrackleEffect()
+            }
+            serviceScope.launch {
+                fadeStaticVolume(from = playerStatic?.volume ?: 0f, to = staticBaseVolume, durationMs = 500L)
+            }
+        } else {
+            staticCrackleJob?.cancel()
+            serviceScope.launch {
+                fadeStaticVolume(from = playerStatic?.volume ?: staticBaseVolume, to = 0f, durationMs = 500L)
+                playerStatic?.pause()
+            }
+        }
+    }
+
     private suspend fun fadeStaticVolume(from: Float, to: Float, durationMs: Long) {
         val steps = 20
         val stepDelay = (durationMs / steps).coerceAtLeast(1L)
@@ -262,6 +288,7 @@ class RadioMediaService : MediaSessionService() {
                 .add(SessionCommand("SWITCH_STATION", Bundle.EMPTY))
                 .add(SessionCommand("SWITCH_GAME", Bundle.EMPTY))
                 .add(SessionCommand("SKIP_NEXT", Bundle.EMPTY))
+                .add(SessionCommand("SET_STATIC_ENABLED", Bundle.EMPTY))
                 .build()
             return MediaSession.ConnectionResult.accept(availableCommands, connectionResult.availablePlayerCommands)
         }
@@ -288,6 +315,9 @@ class RadioMediaService : MediaSessionService() {
                     if (!isTuningTransition && playbackManager != null) {
                         playNextTrack(isManualSkip = true)
                     }
+                }
+                "SET_STATIC_ENABLED" -> {
+                    setStaticEnabled(args.getBoolean("ENABLED", true))
                 }
             }
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
