@@ -5,8 +5,7 @@ data class AudioTrack(
     val title: String,
     val filePath: String,
     val type: AudioType,
-    // Presentes apenas em faixas especiais (pasta com intro/mid/outro).
-    // Se introOptions/outroOptions forem null, é uma faixa normal de arquivo único.
+    val durationMs: Long? = null,
     val introOptions: List<String>? = null,
     val midSegments: List<String>? = null,
     val outroOptions: List<String>? = null

@@ -7,6 +7,7 @@ import com.example.radioplayer.models.AudioType
 import com.example.radioplayer.models.RadioStation
 import java.io.IOException
 import org.json.JSONObject
+import android.media.MediaMetadataRetriever
 
 object RadioStationFactory {
 
@@ -42,11 +43,13 @@ object RadioStationFactory {
             }
 
             val djTalks = djFiles.map { fileName ->
+                val filePath = "$basePath/dj_talks/$fileName"
                 AudioTrack(
                     id = "${idPrefix}_dj_$fileName",
                     title = "Locução",
-                    filePath = "$basePath/dj_talks/$fileName",
-                    type = AudioType.DJ_TALK
+                    filePath = filePath,
+                    type = AudioType.DJ_TALK,
+                    durationMs = computeDurationMs(assetManager, filePath)
                 )
             }
 
@@ -187,6 +190,20 @@ object RadioStationFactory {
             }
         } catch (e: IOException) {
             false
+        }
+    }
+
+    private fun computeDurationMs(assetManager: AssetManager, filePath: String): Long? {
+        return try {
+            val retriever = MediaMetadataRetriever()
+            val afd = assetManager.openFd(filePath)
+            retriever.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+            val timeString = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+            retriever.release()
+            afd.close()
+            timeString?.toLongOrNull()
+        } catch (e: Exception) {
+            null
         }
     }
 }

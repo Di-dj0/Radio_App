@@ -50,10 +50,7 @@ class RadioPlaybackManager(val station: RadioStation) {
         // Só entra se a rádio tiver jingle disponível: sem jingle, este DJ ficaria
         // colado direto no DJ de introdução (2 arquivos do mesmo tipo em sequência).
         if (stationHasJingles && station.djTalks.isNotEmpty() && Random.nextFloat() < djClosingChance) {
-            playbackQueue.add(unplayedDjTalks.removeAt(0))
-            if (unplayedDjTalks.isEmpty()) {
-                unplayedDjTalks = station.djTalks.shuffled().toMutableList()
-            }
+            drawDjTalk(requireShort = true)?.let { playbackQueue.add(it) }
         }
 
         // 2. Vinheta / Jingle da rádio
@@ -66,10 +63,7 @@ class RadioPlaybackManager(val station: RadioStation) {
 
         // 3. DJ de introdução (chama o próximo bloco)
         if (station.djTalks.isNotEmpty()) {
-            playbackQueue.add(unplayedDjTalks.removeAt(0))
-            if (unplayedDjTalks.isEmpty()) {
-                unplayedDjTalks = station.djTalks.shuffled().toMutableList()
-            }
+            drawDjTalk(requireShort = true)?.let { playbackQueue.add(it) }
         }
 
         // 4. Bloco de Comercial + DJ de Transição (30% de chance)
@@ -82,10 +76,7 @@ class RadioPlaybackManager(val station: RadioStation) {
 
             // DJ que fala em cima da música pós-comercial
             if (station.djTalks.isNotEmpty()) {
-                playbackQueue.add(unplayedDjTalks.removeAt(0))
-                if (unplayedDjTalks.isEmpty()) {
-                    unplayedDjTalks = station.djTalks.shuffled().toMutableList()
-                }
+                drawDjTalk(requireShort = true)?.let { playbackQueue.add(it) }
             }
         }
 
@@ -108,6 +99,32 @@ class RadioPlaybackManager(val station: RadioStation) {
         }
         // Retorna o primeiro item sem dar um .removeAt(0)
         return playbackQueue.first()
+    }
+
+    private val maxFadeDjDurationMs = 9000L
+
+    private fun drawDjTalk(requireShort: Boolean): AudioTrack? {
+        if (station.djTalks.isEmpty()) return null
+
+        fun isShort(track: AudioTrack) = (track.durationMs ?: 0L) <= maxFadeDjDurationMs
+
+        val pool = if (requireShort) unplayedDjTalks.filter { isShort(it) } else unplayedDjTalks
+
+        val chosen = pool.randomOrNull() ?: run {
+            if (requireShort) {
+                // Nenhum DJ curto sobrou no pool embaralhado atual: procura de
+                // novo na lista completa da rádio antes de desistir dessa posição.
+                station.djTalks.filter { isShort(it) }.randomOrNull()
+            } else {
+                unplayedDjTalks.randomOrNull()
+            }
+        } ?: return null
+
+        unplayedDjTalks.remove(chosen)
+        if (unplayedDjTalks.isEmpty()) {
+            unplayedDjTalks = station.djTalks.shuffled().toMutableList()
+        }
+        return chosen
     }
 
 }

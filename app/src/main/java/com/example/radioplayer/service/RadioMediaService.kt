@@ -21,7 +21,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.withContext
 import androidx.media3.common.PlaybackException
 import android.app.PendingIntent
 import android.content.Intent
@@ -29,7 +28,6 @@ import androidx.media3.common.ForwardingPlayer
 import com.example.radioplayer.ui.MainActivity
 import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
-import android.media.MediaMetadataRetriever
 import kotlin.random.Random
 import kotlin.coroutines.coroutineContext
 
@@ -43,7 +41,9 @@ class RadioMediaService : MediaSessionService() {
     private var playbackManager: RadioPlaybackManager? = null
     private val serviceScope = CoroutineScope(Dispatchers.Main + Job())
     private var fadeOutJob: Job? = null
-    private var fadeInJob: Job? = null
+    private var fadeInJobA: Job? = null
+    private var fadeInJobB: Job? = null
+    private var duckedMusicPlayer: ExoPlayer? = null
     private var staticCrackleJob: Job? = null
     private val staticBaseVolume = 0.06f
     private var isFirstTrackOfStation = false
@@ -56,6 +56,8 @@ class RadioMediaService : MediaSessionService() {
     private var isDjFollowingAd = false
     private val specialBlendAfterAdMs = 2000L
     private var isStaticEnabled = true
+    private var duckingForPlayer: ExoPlayer? = null
+    private val djToMusicOverlapMs = 2500L
 
     override fun onCreate() {
         super.onCreate()
@@ -123,6 +125,12 @@ class RadioMediaService : MediaSessionService() {
         return object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 val self = selfProvider() ?: return
+
+                if (playbackState == Player.STATE_ENDED && self == duckingForPlayer) {
+                    duckingForPlayer = null
+                    rampDuckedMusicToFull()
+                }
+
                 if (self != activePlayer) return
 
                 // --- tuning effect ---
@@ -149,7 +157,12 @@ class RadioMediaService : MediaSessionService() {
                         isTuningTransition = false
                         startPendingStation()
                     } else {
-                        playNextTrack()
+                        val endedMediaId = self.currentMediaItem?.mediaId ?: ""
+                        if (endedMediaId.contains("_ad_")) {
+                            handleAdEnded()
+                        } else {
+                            playNextTrack()
+                        }
                     }
                 }
             }
@@ -158,9 +171,6 @@ class RadioMediaService : MediaSessionService() {
                 val self = selfProvider() ?: return
                 if (self != activePlayer) return
 
-                // Só reage à mudança de estado do deck ATIVO. O deck que está
-                // silenciosamente terminando em segundo plano depois de um
-                // crossfade não deve mexer na estática nem no outro deck.
                 if (!isPlaying) {
                     if (activePlayer == playerA) playerB?.pause() else playerA?.pause()
                     playerStatic?.pause()
@@ -229,11 +239,9 @@ class RadioMediaService : MediaSessionService() {
         staticCrackleJob?.cancel()
         staticCrackleJob = serviceScope.launch {
             while (isActive) {
-                // Mais frequente: espera bem menor entre os picos
-                val waitMs = Random.nextLong(800L, 3000L)
+                val waitMs = Random.nextLong(4000L, 10000L)
                 delay(waitMs)
 
-                // Mais quieto: pico mais baixo, não briga tanto com a música
                 val peakVolume = Random.nextFloat() * (0.55f - 0.30f) + 0.30f
                 val riseMs = Random.nextLong(150L, 300L)
                 val fallMs = Random.nextLong(300L, 500L)
@@ -327,6 +335,8 @@ class RadioMediaService : MediaSessionService() {
     private fun triggerTuningTransition() {
         isTuningTransition = true
         isDjFollowingAd = false
+        duckingForPlayer = null
+        duckedMusicPlayer = null
 
         playerA?.repeatMode = Player.REPEAT_MODE_OFF
         playerB?.repeatMode = Player.REPEAT_MODE_OFF
@@ -408,38 +418,41 @@ class RadioMediaService : MediaSessionService() {
                         val isSpecialOutro = mediaId.contains("_outro")
 
                         if (isSpecialIntroOrMid) {
-                            // Intro/mid de faixa especial: o ExoPlayer avança sozinho
-                            // pela playlist interna, sem gap. Não fazemos nada aqui.
+
                         } else if (isSpecialOutro) {
-                            // Outro de faixa especial: SOMENTE seu próprio fade de
-                            // saída, nunca a mistura antecipada com o próximo DJ
-                            // (senão a locução do outro embutido é sobreposta por
-                            // uma segunda locução, causando o "bleed").
+
                             val outroFadeMs = Random.nextLong(2000L, 3000L)
                             if (timeLeft in 1..outroFadeMs && timeLeft > outroFadeMs - 500) {
                                 startBackgroundFadeOut(player, outroFadeMs)
                                 playNextTrack()
                             }
+
                         } else if (nextIsDj) {
-                            val djDuration = getAssetDuration(nextTrack!!.filePath)
+
+                            val djDuration = nextTrack!!.durationMs ?: 10000L
                             val triggerTime = (djDuration + 2000L).coerceAtMost(15000L)
 
                             if (timeLeft in 1..triggerTime && timeLeft > triggerTime - 500) {
                                 startBackgroundFadeOut(player, triggerTime)
                                 playNextTrack()
                             }
+
                         } else if (nextIsJingle) {
+
                             val jingleFadeMs = Random.nextLong(1700L, 2400L)
                             if (timeLeft in 1..jingleFadeMs && timeLeft > jingleFadeMs - 500) {
                                 startBackgroundFadeOut(player, jingleFadeMs)
                                 playNextTrack()
                             }
+
                         } else {
+
                             val fallbackFadeMs = Random.nextLong(4500L, 5500L)
                             if (timeLeft in 1..fallbackFadeMs && timeLeft > fallbackFadeMs - 500) {
                                 startBackgroundFadeOut(player, fallbackFadeMs)
                                 playNextTrack()
                             }
+
                         }
                     }
 
@@ -449,16 +462,12 @@ class RadioMediaService : MediaSessionService() {
 
                         if (nextIsSpecialMusic) {
                             if (isDjFollowingAd) {
-                                // Exceção: comercial -> DJ -> faixa especial. Aqui, sim, queremos
-                                // um pequeno bleed de 2s antes do DJ terminar, igual ao clima
-                                // "comercial->DJ->música" comum, só que mais curto.
                                 triggerAdToSpecialBlend(timeLeft)
                             }
-                            // Fora desse caso, sem blend algum: o DJ fala até o fim natural e o
-                            // STATE_ENDED assume a transição.
                         } else if (nextIsMusic) {
-                            if (timeLeft in 1..4000 && timeLeft > 3500) {
-                                playNextTrack()
+                            if (timeLeft <= djToMusicOverlapMs) {
+                                duckingForPlayer = player
+                                playNextTrack(duckToHalfVolume = true)
                             }
                         } else {
                             if (timeLeft in 1..500 && timeLeft > 0) {
@@ -471,29 +480,6 @@ class RadioMediaService : MediaSessionService() {
                     else if (mediaId.contains("_jingle")) {
                         if (timeLeft in 1..500 && timeLeft > 0) {
                             playNextTrack()
-                        }
-                    }
-
-                    // COMERCIAL TOCANDO
-                    else if (mediaId.contains("_ad_")) {
-                        if (timeLeft in 1..1000 && timeLeft > 500) {
-                            val nextWasDj = nextTrack?.filePath?.contains("/dj_talks/") == true
-
-                            playNextTrack()
-
-                            if (nextWasDj) {
-                                val upcomingAfterDj = playbackManager?.peekNextTrack()
-                                val upcomingIsSpecial = upcomingAfterDj?.isSpecialTrack == true
-
-                                if (!upcomingIsSpecial) {
-                                    playNextTrack()
-                                } else {
-                                    // Guarda que este DJ está vindo logo após um comercial e vai
-                                    // introduzir uma faixa especial: só nesse caso específico
-                                    // queremos um pequeno bleed de 2s (ver "DJ TOCANDO" abaixo).
-                                    isDjFollowingAd = true
-                                }
-                            }
                         }
                     }
 
@@ -511,7 +497,27 @@ class RadioMediaService : MediaSessionService() {
         }
     }
 
-    fun playNextTrack(isManualSkip: Boolean = false, specialFadeInOverrideMs: Long? = null) {
+    private fun handleAdEnded() {
+        val nextTrack = playbackManager?.peekNextTrack()
+        val nextWasDj = nextTrack?.filePath?.contains("/dj_talks/") == true
+
+        playNextTrack() // Ad -> DJ de transição (ou direto pra música se a rádio não tem DJ)
+
+        if (nextWasDj) {
+            val djDeck = activePlayer
+            val upcomingAfterDj = playbackManager?.peekNextTrack()
+            val upcomingIsSpecial = upcomingAfterDj?.isSpecialTrack == true
+
+            if (!upcomingIsSpecial) {
+                duckingForPlayer = djDeck
+                playNextTrack(duckToHalfVolume = true)
+            } else {
+                isDjFollowingAd = true
+            }
+        }
+    }
+
+    fun playNextTrack(isManualSkip: Boolean = false, specialFadeInOverrideMs: Long? = null, duckToHalfVolume: Boolean = false) {
         val nextTrack = playbackManager?.getNextTrack() ?: return
         val station = playbackManager?.station
 
@@ -532,9 +538,12 @@ class RadioMediaService : MediaSessionService() {
         if (nextPlayer == playerA) fadeOutJobA?.cancel() else fadeOutJobB?.cancel()
 
         if (isManualSkip) {
-            fadeInJob?.cancel()
+            fadeInJobA?.cancel()
+            fadeInJobB?.cancel()
             activePlayer?.stop()
             activePlayer?.clearMediaItems()
+            duckingForPlayer = null
+            duckedMusicPlayer = null
         }
 
         if (nextTrack.isSpecialTrack) {
@@ -600,9 +609,16 @@ class RadioMediaService : MediaSessionService() {
             nextPlayer?.volume = 0.0f
             val musicFadeInMs = specialFadeInOverrideMs
                 ?: (if (nextTrack.isSpecialTrack) 1000L else 4000L)
-            startFadeIn(nextPlayer, musicFadeInMs)
+
+            if (duckToHalfVolume && !nextTrack.isSpecialTrack) {
+                duckedMusicPlayer = nextPlayer
+                startFadeIn(nextPlayer, musicFadeInMs, targetVolume = 0.5f)
+            } else {
+                startFadeIn(nextPlayer, musicFadeInMs)
+            }
         } else {
-            fadeInJob?.cancel()
+            fadeInJobA?.cancel()
+            fadeInJobB?.cancel()
             nextPlayer?.volume = 1.0f
         }
 
@@ -612,18 +628,28 @@ class RadioMediaService : MediaSessionService() {
         mediaSession?.player = getForwardingPlayer(activePlayer!!)
     }
 
-    private fun startFadeIn(targetPlayer: ExoPlayer?, durationMs: Long = 3000L) {
-        fadeInJob?.cancel()
-        fadeInJob = serviceScope.launch {
+    private fun startFadeIn(
+        targetPlayer: ExoPlayer?,
+        durationMs: Long = 3000L,
+        targetVolume: Float = 1.0f,
+        fromVolume: Float = 0.0f
+    ) {
+        val isDeckA = targetPlayer == playerA
+        if (isDeckA) fadeInJobA?.cancel() else fadeInJobB?.cancel()
+
+        val job = serviceScope.launch {
             val steps = 30
             val delayTime = durationMs / steps
-            for (i in 1..steps) {
+            for (i in 0..steps) {
                 if (!isActive) break
-                targetPlayer?.volume = i.toFloat() / steps
+                val fraction = i.toFloat() / steps
+                targetPlayer?.volume = fromVolume + (targetVolume - fromVolume) * fraction
                 delay(delayTime)
             }
-            targetPlayer?.volume = 1.0f
+            targetPlayer?.volume = targetVolume
         }
+
+        if (isDeckA) fadeInJobA = job else fadeInJobB = job
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
@@ -659,20 +685,6 @@ class RadioMediaService : MediaSessionService() {
         if (timeLeft in 1..specialBlendAfterAdMs && timeLeft > specialBlendAfterAdMs - 500) {
             isDjFollowingAd = false
             playNextTrack(specialFadeInOverrideMs = specialBlendAfterAdMs)
-        }
-    }
-
-    private suspend fun getAssetDuration(filePath: String): Long = withContext(Dispatchers.IO) {
-        try {
-            val retriever = MediaMetadataRetriever()
-            val afd = assets.openFd(filePath)
-            retriever.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
-            val timeString = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-            retriever.release()
-            afd.close()
-            timeString?.toLong() ?: 10000L
-        } catch (e: Exception) {
-            10000L
         }
     }
 
@@ -712,5 +724,11 @@ class RadioMediaService : MediaSessionService() {
         playerStatic?.release()
         mediaSession?.release()
         super.onDestroy()
+    }
+
+    private fun rampDuckedMusicToFull() {
+        val target = duckedMusicPlayer ?: return
+        duckedMusicPlayer = null
+        startFadeIn(target, durationMs = 1200L, targetVolume = 1.0f, fromVolume = target.volume)
     }
 }
