@@ -42,8 +42,48 @@ import com.example.radioplayer.R
 import androidx.compose.foundation.border
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.BlendMode
+import kotlin.math.cos
+import kotlin.math.sin
 
 val pricedownFont = FontFamily(Font(R.font.pricedown))
+
+@Composable
+fun StickerImage(
+    bitmap: androidx.compose.ui.graphics.ImageBitmap,
+    contentDescription: String?,
+    modifier: Modifier = Modifier,
+    borderWidth: androidx.compose.ui.unit.Dp = 6.dp,
+    borderColor: Color = Color.Black,
+    steps: Int = 16
+) {
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        for (i in 0 until steps) {
+            val angle = 2.0 * Math.PI * i / steps
+            val offsetX = borderWidth * cos(angle).toFloat()
+            val offsetY = borderWidth * sin(angle).toFloat()
+
+            Image(
+                bitmap = bitmap,
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                colorFilter = ColorFilter.tint(borderColor, BlendMode.SrcIn),
+                modifier = Modifier
+                    .matchParentSize()
+                    .offset(x = offsetX, y = offsetY)
+            )
+        }
+
+        // Logo original por cima, sem nenhum tingimento
+        Image(
+            bitmap = bitmap,
+            contentDescription = contentDescription,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.matchParentSize()
+        )
+    }
+}
 
 @Composable
 fun GtaCanvasSkipNextIcon(
@@ -261,10 +301,10 @@ fun PlayerScreen(viewModel: RadioViewModel) {
         ) {
 
             if (bitmap != null) {
-                Image(
+                StickerImage(
                     bitmap = bitmap,
                     contentDescription = "Logo da $stationName",
-                    contentScale = ContentScale.Fit,
+                    borderWidth = 6.dp,
                     modifier = Modifier
                         .size(250.dp)
                         .clickable { showStationsDialog = true }
