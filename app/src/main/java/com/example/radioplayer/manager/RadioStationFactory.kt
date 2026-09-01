@@ -255,4 +255,32 @@ object RadioStationFactory {
             )
         }
     }
+
+    fun getGameFontAssetPath(context: Context, gameFolder: String): String? {
+        val assetManager = context.assets
+        return try {
+            val configPath = "$gameFolder/general/config.json"
+            val jsonString = assetManager.open(configPath).bufferedReader().use { it.readText() }
+            val jsonObject = JSONObject(jsonString)
+
+            val fontFileName = if (jsonObject.has("fontFamily")) {
+                jsonObject.getString("fontFamily")
+            } else {
+                null
+            } ?: return null
+
+            val fontPath = "$gameFolder/general/fonts/$fontFileName"
+
+            val fontsDirFiles = assetManager.list("$gameFolder/general/fonts") ?: emptyArray()
+            if (fontFileName !in fontsDirFiles) {
+                println("Aviso: config.json de '$gameFolder' referencia '$fontFileName', mas o arquivo não foi encontrado em general/fonts/. Usando fonte padrão.")
+                return null
+            }
+
+            fontPath
+        } catch (e: Exception) {
+            // Sem config.json, JSON malformado, ou qualquer outro problema -> fallback
+            null
+        }
+    }
 }

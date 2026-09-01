@@ -31,23 +31,60 @@ import androidx.palette.graphics.Palette
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.text.TextStyle
 import com.example.radioplayer.R
 import androidx.compose.foundation.border
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.BlendMode
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
 import kotlin.math.cos
 import kotlin.math.sin
 
-val pricedownFont = FontFamily(Font(R.font.pricedown))
+val defaultGtaFont = FontFamily(Font(R.font.pricedown))
+
+private val fontCache = mutableMapOf<String, FontFamily>()
+
+@Composable
+fun rememberGameFont(context: android.content.Context, fontAssetPath: String?): FontFamily {
+    var resolvedFont by remember(fontAssetPath) { mutableStateOf(defaultGtaFont) }
+
+    LaunchedEffect(fontAssetPath) {
+        if (fontAssetPath == null) {
+            resolvedFont = defaultGtaFont
+            return@LaunchedEffect
+        }
+
+        fontCache[fontAssetPath]?.let {
+            resolvedFont = it
+            return@LaunchedEffect
+        }
+
+        val loaded = withContext(Dispatchers.IO) {
+            try {
+                val tempFile = File.createTempFile("gamefont", fontAssetPath.substringAfterLast("."), context.cacheDir)
+                context.assets.open(fontAssetPath).use { input ->
+                    tempFile.outputStream().use { output -> input.copyTo(output) }
+                }
+                FontFamily(Font(tempFile))
+            } catch (e: Exception) {
+                null
+            }
+        }
+
+        resolvedFont = loaded ?: defaultGtaFont
+        if (loaded != null) fontCache[fontAssetPath] = loaded
+    }
+
+    return resolvedFont
+}
 
 @Composable
 fun StickerImage(
@@ -168,12 +205,13 @@ fun GtaText(
     fillColor: Color,
     outlineColor: Color = Color.Black,
     fontSize: androidx.compose.ui.unit.TextUnit,
-    strokeWidth: Float = 12f
+    strokeWidth: Float = 12f,
+    fontFamily: FontFamily = defaultGtaFont
 ) {
 
     val baseStyle = LocalTextStyle.current.copy(
         fontSize = fontSize,
-        fontFamily = pricedownFont,
+        fontFamily = fontFamily,
         textAlign = TextAlign.Center
     )
 
@@ -212,9 +250,11 @@ fun PlayerScreen(viewModel: RadioViewModel) {
     var showGameDropdown by remember { mutableStateOf(false) }
     val frequency by viewModel.frequency.collectAsState()
     val isStaticEnabled by viewModel.isStaticEnabled.collectAsState()
+    val gameFontAssetPath by viewModel.gameFontAssetPath.collectAsState()
     var dominantColor by remember { mutableStateOf(Color(0xFF121212)) }
 
     val context = LocalContext.current
+    val gameFont = rememberGameFont(context, gameFontAssetPath)
 
     val bitmap = remember(iconPath) {
         iconPath?.let { path ->
@@ -324,7 +364,8 @@ fun PlayerScreen(viewModel: RadioViewModel) {
                 text = stationName,
                 fillColor = Color.White,
                 fontSize = 46.sp,
-                strokeWidth = 14f
+                strokeWidth = 14f,
+                fontFamily = gameFont
             )
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -333,7 +374,8 @@ fun PlayerScreen(viewModel: RadioViewModel) {
                 text = trackTitle,
                 fillColor = Color(0xFFFFD700),
                 fontSize = 28.sp,
-                strokeWidth = 10f
+                strokeWidth = 10f,
+                fontFamily = gameFont
             )
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -342,7 +384,8 @@ fun PlayerScreen(viewModel: RadioViewModel) {
                 text = frequency,
                 fillColor = Color(0xFFFFB300),
                 fontSize = 22.sp,
-                strokeWidth = 8f
+                strokeWidth = 8f,
+                fontFamily = gameFont
             )
 
             Spacer(modifier = Modifier.height(48.dp))

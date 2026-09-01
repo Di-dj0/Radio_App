@@ -53,6 +53,9 @@ class RadioViewModel : ViewModel() {
     private val _isStaticEnabled = MutableStateFlow(true)
     val isStaticEnabled = _isStaticEnabled.asStateFlow()
 
+    private val _gameFontAssetPath = MutableStateFlow<String?>(null)
+    val gameFontAssetPath = _gameFontAssetPath.asStateFlow()
+
     fun initController(context: Context) {
         appContext = context.applicationContext
 
@@ -72,6 +75,11 @@ class RadioViewModel : ViewModel() {
             RadioStationFactory.getAllAvailableStations(context, defaultGame)
         } else {
             emptyList()
+        }
+        _gameFontAssetPath.value = if (defaultGame.isNotEmpty()) {
+            RadioStationFactory.getGameFontAssetPath(context, defaultGame)
+        } else {
+            null
         }
     }
 
@@ -106,6 +114,7 @@ class RadioViewModel : ViewModel() {
         _selectedGame.value = gameFolder
         appContext?.let { ctx ->
             _availableStations.value = RadioStationFactory.getAllAvailableStations(ctx, gameFolder)
+            _gameFontAssetPath.value = RadioStationFactory.getGameFontAssetPath(ctx, gameFolder)
         }
 
         val command = SessionCommand("SWITCH_GAME", Bundle.EMPTY)
