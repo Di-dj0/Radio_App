@@ -88,6 +88,17 @@ class RadioPlaybackManager(val station: RadioStation) {
             playbackQueue.add(unplayedMusic.removeAt(0))
         }
 
+        // 6. Bloco de notícias (Fallout)
+        station.newsTemplate?.let { newsTemplate ->
+            val newsChance = Random.nextFloat() * 0.25f + 0.50f // 50%–75%
+            if (Random.nextFloat() < newsChance) {
+                // Sempre precede o bloco de notícias com um radio_hello
+                if (station.radioHellos.isNotEmpty()) {
+                    playbackQueue.add(station.radioHellos.random())
+                }
+                playbackQueue.add(newsTemplate)
+            }
+        }
     }
 
     fun peekNextTrack(): AudioTrack {

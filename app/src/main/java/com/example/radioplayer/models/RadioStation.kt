@@ -9,5 +9,7 @@ data class RadioStation(
     val musicTracks: List<AudioTrack>,
     val djTalks: List<AudioTrack>,
     val jingles: List<AudioTrack>,
-    val ads: List<AudioTrack>
+    val ads: List<AudioTrack>,
+    val newsTemplate: AudioTrack? = null,
+    val radioHellos: List<AudioTrack> = emptyList()
 )

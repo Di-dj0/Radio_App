@@ -71,6 +71,9 @@ object RadioStationFactory {
                 )
             }
 
+            val newsTemplate = buildNewsTemplate(assetManager, idPrefix, basePath)
+            val radioHellos = buildRadioHellos(assetManager, idPrefix, basePath)
+
             // default names and frequency
             var prettyName = stationFolder
             var stationFrequency = "89.9 FM"
@@ -102,7 +105,9 @@ object RadioStationFactory {
                 musicTracks = musicTracks,
                 djTalks = djTalks,
                 jingles = jingles,
-                ads = ads
+                ads = ads,
+                newsTemplate = newsTemplate,
+                radioHellos = radioHellos
             )
         } catch (e: IOException) {
             e.printStackTrace()
@@ -110,12 +115,7 @@ object RadioStationFactory {
         }
     }
 
-    /**
-     * Constrói uma faixa "especial": uma pasta dentro de /music contendo
-     * uma ou mais introduções, um ou mais trechos centrais (mid) e um ou mais
-     * finais, todos já com as transições de DJ embutidas no áudio.
-     * O nome da pasta deve seguir o formato "{Nome da Música} - {Artista}".
-     */
+
     private fun buildSpecialTrack(
         assetManager: AssetManager,
         idPrefix: String,
@@ -204,6 +204,55 @@ object RadioStationFactory {
             timeString?.toLongOrNull()
         } catch (e: Exception) {
             null
+        }
+    }
+
+    private fun buildNewsTemplate(assetManager: AssetManager, idPrefix: String, basePath: String): AudioTrack? {
+        val newsPath = "$basePath/news"
+        val files = assetManager.list(newsPath) ?: emptyArray()
+        if (files.isEmpty()) return null // Sem pasta news/ -> rádio não usa esse recurso (ex.: rádios GTA)
+
+        val introFiles = files.filter { it.contains("intro", ignoreCase = true) }
+        val outroFiles = files.filter { it.contains("outro", ignoreCase = true) }
+        val transitionFiles = files.filter { it.contains("transition", ignoreCase = true) }
+        val sponsorFiles = files.filter { it.contains("sponsor", ignoreCase = true) }
+        val endingFiles = files.filter { it.contains("ending", ignoreCase = true) }
+        val newsItemFiles = files.filter { fileName ->
+            !fileName.contains("intro", ignoreCase = true) &&
+                    !fileName.contains("outro", ignoreCase = true) &&
+                    !fileName.contains("transition", ignoreCase = true) &&
+                    !fileName.contains("sponsor", ignoreCase = true) &&
+                    !fileName.contains("ending", ignoreCase = true)
+        }
+
+        if (introFiles.isEmpty() || outroFiles.isEmpty() || newsItemFiles.isEmpty()) {
+            println("Aviso: pasta news/ em '$basePath' incompleta (precisa de ao menos 1 intro, 1 outro e 1 notícia). Bloco de notícias desativado pra essa rádio.")
+            return null
+        }
+
+        return AudioTrack(
+            id = "${idPrefix}_newsblock",
+            title = "Notícias",
+            filePath = "$newsPath/${newsItemFiles.first()}", // referência/fallback, não usado na composição
+            type = AudioType.NEWS_BLOCK,
+            newsIntroOptions = introFiles.map { "$newsPath/$it" },
+            newsItemOptions = newsItemFiles.map { "$newsPath/$it" },
+            newsTransitionOptions = transitionFiles.map { "$newsPath/$it" },
+            newsEndingOptions = (endingFiles + sponsorFiles).map { "$newsPath/$it" },
+            newsOutroOptions = outroFiles.map { "$newsPath/$it" }
+        )
+    }
+
+    private fun buildRadioHellos(assetManager: AssetManager, idPrefix: String, basePath: String): List<AudioTrack> {
+        val helloPath = "$basePath/radio_hello"
+        val files = assetManager.list(helloPath) ?: emptyArray()
+        return files.map { fileName ->
+            AudioTrack(
+                id = "${idPrefix}_radiohello_$fileName",
+                title = "Identificação da Rádio",
+                filePath = "$helloPath/$fileName",
+                type = AudioType.RADIO_HELLO
+            )
         }
     }
 }
