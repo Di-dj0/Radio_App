@@ -47,11 +47,25 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.cos
 import kotlin.math.sin
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.draw.clip
+import androidx.core.graphics.toColorInt
+import com.example.radioplayer.models.RadioStation
 
 val defaultGtaFont = FontFamily(Font(R.font.pricedown))
 
 private val fontCache = mutableMapOf<String, FontFamily>()
 
+private fun parseHexColorOrDefault(hex: String, default: Color): Color {
+    return try {
+        Color(hex.toColorInt())
+    } catch (e: Exception) {
+        default
+    }
+}
 @Composable
 fun rememberGameFont(context: android.content.Context, fontAssetPath: String?): FontFamily {
     var resolvedFont by remember(fontAssetPath) { mutableStateOf(defaultGtaFont) }
@@ -200,6 +214,113 @@ fun androidx.compose.ui.graphics.vector.VectorPainter.toPath(): androidx.compose
 }
 
 @Composable
+fun RadialStationSelector(
+    stations: List<RadioStation>,
+    currentStationName: String,
+    accentColor: Color,
+    onStationSelected: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val density = LocalDensity.current
+
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.80f))
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { MutableInteractionSource() }
+                ) { onDismiss() }
+        ) {
+            val n = stations.size
+            if (n == 0) return@BoxWithConstraints
+
+            val screenWidthPx = with(density) { maxWidth.toPx() }
+            val screenHeightPx = with(density) { maxHeight.toPx() }
+            val centerX = screenWidthPx / 2f
+            val centerY = screenHeightPx / 2f
+
+            val safePaddingPx = with(density) { 20.dp.toPx() }
+            val minItemDp = 40f
+            val maxItemDp = 64f
+            val spacingDp = 10f
+
+            // Raio máximo que o CÍRCULO INTEIRO (com todos os ícones) consegue
+            // ocupar sem sair da tela.
+            val maxRadiusPx = (minOf(screenWidthPx, screenHeightPx) / 2f) - safePaddingPx
+
+            // A partir desse raio máximo, calcula o maior tamanho de ícone que
+            // ainda cabe sem sobrepor o vizinho (corda do círculo entre dois
+            // pontos adjacentes = 2 * raio * sin(π/N)). Quanto mais estações,
+            // menor o ícone — automaticamente.
+            val angleStep = 2.0 * Math.PI / n
+            val chordAtMaxRadiusPx = if (n > 1) (2f * maxRadiusPx * sin(angleStep / 2.0)).toFloat() else maxRadiusPx
+            val chordAtMaxRadiusDp = with(density) { chordAtMaxRadiusPx.toDp().value }
+            val itemSizeDp = (chordAtMaxRadiusDp - spacingDp).coerceIn(minItemDp, maxItemDp)
+            val itemSizePx = with(density) { itemSizeDp.dp.toPx() }
+
+            // Raio real usado pro posicionamento: o mesmo raio máximo, só que
+            // recuado em meio ícone, pra nenhum círculo estourar a borda da tela.
+            val radiusPx = maxRadiusPx - itemSizePx / 2f
+
+            stations.forEachIndexed { index, station ->
+                val angle = -Math.PI / 2.0 + angleStep * index // começa no topo, sentido horário
+                val itemCenterX = centerX + radiusPx * cos(angle).toFloat()
+                val itemCenterY = centerY + radiusPx * sin(angle).toFloat()
+
+                val stationBitmap = remember(station.iconPath) {
+                    try {
+                        context.assets.open(station.iconPath).use { BitmapFactory.decodeStream(it) }.asImageBitmap()
+                    } catch (e: Exception) {
+                        null
+                    }
+                }
+
+                val isSelected = station.name == currentStationName
+
+                Box(
+                    modifier = Modifier
+                        .offset(
+                            x = with(density) { (itemCenterX - itemSizePx / 2f).toDp() },
+                            y = with(density) { (itemCenterY - itemSizePx / 2f).toDp() }
+                        )
+                        .size(itemSizeDp.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF1A1A1A))
+                        .border(
+                            width = if (isSelected) 3.dp else 1.5.dp,
+                            color = if (isSelected) accentColor else Color.White.copy(alpha = 0.35f),
+                            shape = CircleShape
+                        )
+                        .clickable {
+                            onStationSelected(station.id)
+                            onDismiss()
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (stationBitmap != null) {
+                        Image(
+                            bitmap = stationBitmap,
+                            contentDescription = station.name,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Text(
+                            text = station.name.take(2).uppercase(),
+                            color = Color.White,
+                            fontSize = (itemSizeDp / 4).sp
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun GtaText(
     text: String,
     fillColor: Color,
@@ -251,10 +372,14 @@ fun PlayerScreen(viewModel: RadioViewModel) {
     val frequency by viewModel.frequency.collectAsState()
     val isStaticEnabled by viewModel.isStaticEnabled.collectAsState()
     val gameFontAssetPath by viewModel.gameFontAssetPath.collectAsState()
+    val gameColors by viewModel.gameColors.collectAsState()
     var dominantColor by remember { mutableStateOf(Color(0xFF121212)) }
 
     val context = LocalContext.current
     val gameFont = rememberGameFont(context, gameFontAssetPath)
+
+    val mainTextColor = remember(gameColors.textColorHex) { parseHexColorOrDefault(gameColors.textColorHex, Color.White) }
+    val accentColor = remember(gameColors.accentColorHex) { parseHexColorOrDefault(gameColors.accentColorHex, Color(0xFFFFD700)) }
 
     val bitmap = remember(iconPath) {
         iconPath?.let { path ->
@@ -362,8 +487,8 @@ fun PlayerScreen(viewModel: RadioViewModel) {
 
             GtaText(
                 text = stationName,
-                fillColor = Color.White,
-                fontSize = 46.sp,
+                fillColor = mainTextColor,
+                fontSize = 42.sp,
                 strokeWidth = 14f,
                 fontFamily = gameFont
             )
@@ -372,17 +497,17 @@ fun PlayerScreen(viewModel: RadioViewModel) {
 
             GtaText(
                 text = trackTitle,
-                fillColor = Color(0xFFFFD700),
+                fillColor = accentColor,
                 fontSize = 28.sp,
                 strokeWidth = 10f,
                 fontFamily = gameFont
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(5.dp))
 
             GtaText(
                 text = frequency,
-                fillColor = Color(0xFFFFB300),
+                fillColor = accentColor,
                 fontSize = 22.sp,
                 strokeWidth = 8f,
                 fontFamily = gameFont
@@ -395,21 +520,19 @@ fun PlayerScreen(viewModel: RadioViewModel) {
                 horizontalArrangement = Arrangement.spacedBy(32.dp)
             ) {
                 // BOTÃO DE RUÍDO ESTÁTICO (LIGA/DESLIGA)
-                Box(
+                Button(
+                    onClick = { viewModel.toggleStatic() },
                     modifier = Modifier
-                        .size(64.dp)
-                        .border(width = 4.dp, color = Color.Black, shape = CircleShape)
-                        .background(
-                            color = if (isStaticEnabled) Color(0xFFFFD700) else Color(0xFF2A2A2A),
-                            shape = CircleShape
-                        )
-                        .clickable { viewModel.toggleStatic() },
-                    contentAlignment = Alignment.Center
+                        .size(80.dp)
+                        .border(width = 4.dp, color = Color.Black, shape = CircleShape),
+                    shape = CircleShape,
+                    colors = ButtonDefaults.buttonColors(containerColor = accentColor),
+                    contentPadding = PaddingValues(0.dp)
                 ) {
                     Icon(
                         imageVector = androidx.compose.material.icons.Icons.Filled.GraphicEq,
                         contentDescription = if (isStaticEnabled) "Desligar ruído estático" else "Ligar ruído estático",
-                        tint = if (isStaticEnabled) Color.Black else Color(0xFFFFD700),
+                        tint = if (isStaticEnabled) Color.Black else Color.Gray,
                         modifier = Modifier.size(34.dp)
                     )
                 }
@@ -419,10 +542,9 @@ fun PlayerScreen(viewModel: RadioViewModel) {
                     onClick = { viewModel.togglePlayPause() },
                     modifier = Modifier
                         .size(80.dp)
-                        // ✨ REDUZIDO: Borda de 4.dp (Padrão era 6.dp)
                         .border(width = 4.dp, color = Color.Black, shape = CircleShape),
                     shape = CircleShape,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFD700)), // Amarelo GTA
+                    colors = ButtonDefaults.buttonColors(containerColor = accentColor),
                     contentPadding = PaddingValues(0.dp)
                 ) {
                     Icon(
@@ -438,61 +560,91 @@ fun PlayerScreen(viewModel: RadioViewModel) {
                     onClick = { viewModel.skipNext() },
                     modifier = Modifier.size(64.dp)
                 ) {
-                    // ✨ USANDO O NOVO ÍCONE DE CANVAS PERFEITAMENTE ALINHADO
                     GtaCanvasSkipNextIcon(
                         contentDescription = "Avançar",
                         iconSize = 48.dp,
-                        fillColor = Color(0xFFFFD700),
-                        // ✨ Borda fina e precisa
+                        fillColor = accentColor,
                         outlineStrokeWidth = 8.dp
                     )
                 }
+            }
+
+            val staticVolume by viewModel.staticVolume.collectAsState()
+
+            // SLIDER IMPLEMENTATION
+            if (isStaticEnabled) {
+                Spacer(modifier = Modifier.height(32.dp))
+
+                Slider(
+                    value = staticVolume * 100f, // Convert 0.0-1.0 to 0-100 range for the UI
+                    onValueChange = { newValue ->
+                        viewModel.setStaticVolume(newValue / 100f) // Convert back to 0.0-1.0 float
+                    },
+                    valueRange = 0f..100f,
+                    steps = 9, // Snap in steps of 10
+                    colors = SliderDefaults.colors(
+                        thumbColor = accentColor,
+                        activeTrackColor = accentColor,
+                        inactiveTrackColor = accentColor.copy(alpha = 0.3f),
+                        activeTickColor = Color.Black.copy(alpha = 0.5f),
+                        inactiveTickColor = Color.Transparent
+                    ),
+                    modifier = Modifier.fillMaxWidth(0.75f)
+                )
             }
 
         }
     }
 
     if (showStationsDialog) {
+        if (gameColors.stationSelectorStyle == "list") {
+            Dialog(onDismissRequest = { showStationsDialog = false }) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
+                    modifier = Modifier.fillMaxWidth().padding(24.dp)
+                ) {
+                    Column(modifier = Modifier.padding(24.dp)) {
+                        Text(
+                            text = "Sintonizar Rádio",
+                            color = Color.Yellow,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(bottom = 16.dp)
+                        )
 
-        Dialog(onDismissRequest = { showStationsDialog = false }) {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
-                modifier = Modifier.fillMaxWidth().padding(24.dp)
-            ) {
-                Column(modifier = Modifier.padding(24.dp)) {
-                    Text(
-                        text = "Sintonizar Rádio",
-                        color = Color.Yellow,
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(bottom = 16.dp)
-                    )
-
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        items(availableStations) { station ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        viewModel.switchStation(station.id)
-                                        showStationsDialog = false // Fecha o pop-up
-                                    }
-                                    .padding(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = station.name,
-                                    color = Color.White,
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
+                        LazyColumn(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                            items(availableStations) { station ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            viewModel.switchStation(station.id)
+                                            showStationsDialog = false
+                                        }
+                                        .padding(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = station.name,
+                                        color = Color.White,
+                                        fontSize = 18.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
+        } else {
+            RadialStationSelector(
+                stations = availableStations,
+                currentStationName = stationName,
+                accentColor = accentColor,
+                onStationSelected = { stationId -> viewModel.switchStation(stationId) },
+                onDismiss = { showStationsDialog = false }
+            )
         }
-
     }
 
 }

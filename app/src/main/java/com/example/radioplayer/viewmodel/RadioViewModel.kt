@@ -18,7 +18,8 @@ import android.os.Bundle
 import androidx.media3.session.SessionCommand
 import com.example.radioplayer.models.RadioStation
 import com.example.radioplayer.manager.RadioStationFactory
-
+import com.example.radioplayer.models.GameColors
+import kotlinx.coroutines.flow.StateFlow
 
 class RadioViewModel : ViewModel() {
 
@@ -56,6 +57,9 @@ class RadioViewModel : ViewModel() {
     private val _gameFontAssetPath = MutableStateFlow<String?>(null)
     val gameFontAssetPath = _gameFontAssetPath.asStateFlow()
 
+    private val _gameColors = MutableStateFlow(GameColors())
+    val gameColors = _gameColors.asStateFlow()
+
     fun initController(context: Context) {
         appContext = context.applicationContext
 
@@ -81,6 +85,23 @@ class RadioViewModel : ViewModel() {
         } else {
             null
         }
+        _gameColors.value = if (defaultGame.isNotEmpty()) {
+            RadioStationFactory.getGameColors(context, defaultGame)
+        } else {
+            GameColors()
+        }
+    }
+
+    private val _staticVolume = MutableStateFlow(0.5f) // Range: 0.0f to 1.0f
+    val staticVolume: StateFlow<Float> = _staticVolume.asStateFlow()
+
+    fun setStaticVolume(volume: Float) {
+        _staticVolume.value = volume
+
+        // Send the new volume to the RadioMediaService
+        val command = SessionCommand("SET_STATIC_VOLUME", Bundle.EMPTY)
+        val args = Bundle().apply { putFloat("VOLUME", volume) }
+        controller?.sendCustomCommand(command, args)
     }
 
     private fun setupPlayerListener() {
@@ -115,6 +136,7 @@ class RadioViewModel : ViewModel() {
         appContext?.let { ctx ->
             _availableStations.value = RadioStationFactory.getAllAvailableStations(ctx, gameFolder)
             _gameFontAssetPath.value = RadioStationFactory.getGameFontAssetPath(ctx, gameFolder)
+            _gameColors.value = RadioStationFactory.getGameColors(ctx, gameFolder)
         }
 
         val command = SessionCommand("SWITCH_GAME", Bundle.EMPTY)

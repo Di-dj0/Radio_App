@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
+import android.util.Log
 import androidx.annotation.OptIn
 import androidx.core.graphics.scale
 import androidx.core.net.toUri
@@ -22,6 +23,8 @@ import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import com.example.radioplayer.manager.RadioPlaybackManager
 import com.example.radioplayer.manager.RadioStationFactory
+import com.example.radioplayer.models.AudioTrack
+import com.example.radioplayer.models.AudioType
 import com.example.radioplayer.models.RadioStation
 import com.example.radioplayer.ui.MainActivity
 import com.google.common.util.concurrent.Futures
@@ -36,6 +39,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.random.Random
 
 class RadioMediaService : MediaSessionService() {
@@ -52,7 +56,7 @@ class RadioMediaService : MediaSessionService() {
     private var fadeInJobB: Job? = null
     private var duckedMusicPlayer: ExoPlayer? = null
     private var staticCrackleJob: Job? = null
-    private val staticBaseVolume = 0.06f
+    private var staticBaseVolume = 0.06f
     private var isFirstTrackOfStation = false
     private var isTuningTransition = false
     private var pendingStationId: String? = null
@@ -65,7 +69,7 @@ class RadioMediaService : MediaSessionService() {
     private var isStaticEnabled = true
     private var duckingForPlayer: ExoPlayer? = null
     private val djToMusicOverlapMs = 2500L
-    private val newsAndHelloVolume = 0.80f
+    private val newsAndHelloVolume = 0.20f
     private val artworkCache = mutableMapOf<String, ByteArray>()
 
     override fun onCreate() {
@@ -197,9 +201,9 @@ class RadioMediaService : MediaSessionService() {
         duckedMusicPlayer = null
     }
 
-    private fun assetUri(assetPath: String): Uri {
-        val encodedPath = assetPath.split("/").joinToString("/") { segment -> Uri.encode(segment) }
-        return "file:///android_asset/$encodedPath".toUri()
+    private fun assetUri(path: String): Uri {
+        val cleanPath = path.trim().removePrefix("/")
+        return "asset:///$cleanPath".toUri()
     }
 
     private fun seekToRandomPositionIfLongEnough(player: ExoPlayer?) {
@@ -348,6 +352,7 @@ class RadioMediaService : MediaSessionService() {
                 .add(SessionCommand("SWITCH_GAME", Bundle.EMPTY))
                 .add(SessionCommand("SKIP_NEXT", Bundle.EMPTY))
                 .add(SessionCommand("SET_STATIC_ENABLED", Bundle.EMPTY))
+                .add(SessionCommand("SET_STATIC_VOLUME", Bundle.EMPTY))
                 .build()
             return MediaSession.ConnectionResult.accept(availableCommands, connectionResult.availablePlayerCommands)
         }
@@ -377,6 +382,12 @@ class RadioMediaService : MediaSessionService() {
                 }
                 "SET_STATIC_ENABLED" -> {
                     setStaticEnabled(args.getBoolean("ENABLED", true))
+                }
+                "SET_STATIC_VOLUME" -> {
+                    val newVolume = args.getFloat("VOLUME", 0.06f)
+                    staticBaseVolume = newVolume
+                    val scaledVolume = newVolume * 0.3f
+                    playerStatic?.volume = scaledVolume
                 }
             }
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
@@ -464,11 +475,12 @@ class RadioMediaService : MediaSessionService() {
 
                     // MÚSICA TOCANDO
                     if (mediaId.contains("_music_")) {
-                        val isSpecialIntroOrMid = mediaId.contains("_intro") || mediaId.contains("_mid_")
-                        val isSpecialOutro = mediaId.contains("_outro")
+                        val lowerId = mediaId.lowercase()
+                        val isSpecialIntroOrMid = lowerId.contains("intro") || lowerId.contains("mid")
+                        val isSpecialOutro = lowerId.contains("outro")
 
                         if (isSpecialIntroOrMid) {
-                            continue
+                            // DO NOTHING.
                         } else if (isSpecialOutro) {
                             val outroFadeMs = Random.nextLong(2000L, 3000L)
                             if (timeLeft in 1..outroFadeMs && timeLeft > outroFadeMs - 500) {
@@ -525,8 +537,8 @@ class RadioMediaService : MediaSessionService() {
                         }
                     }
 
-                    // RADIO HELLO OU NEWS BLOCK (Deixa o listener de fim de faixa tratar a transição quando terminar)
-                    else if (mediaId.contains("_newsblock_")) {
+                    // NEWS BLOCK
+                    else if (mediaId.contains("_newsblock")) {
                         // Intentionally left empty — let ExoPlayer play all segment MediaItems sequentially
                     }
 
@@ -570,170 +582,204 @@ class RadioMediaService : MediaSessionService() {
         }
     }
 
-    fun playNextTrack(isManualSkip: Boolean = false, specialFadeInOverrideMs: Long? = null, duckToHalfVolume: Boolean = false) {
-        val nextTrack = playbackManager?.getNextTrack() ?: return
-        val station = playbackManager?.station
+    private var isPreparingTrack = false
 
-        val artworkData = getStationArtwork(station)
+    fun playNextTrack(
+        isManualSkip: Boolean = false,
+        specialFadeInOverrideMs: Long? = null,
+        duckToHalfVolume: Boolean = false
+    ) {
+        // Prevent multiple rapid button presses or listener triggers from firing overlapping calls
+        if (isPreparingTrack) return
+        isPreparingTrack = true
 
-        val extras = Bundle().apply {
-            putString("icon_path", station?.iconPath)
-        }
+        try {
+            val manager = playbackManager ?: return
+            val nextTrack: AudioTrack = manager.getNextTrack() ?: return
+            val station = manager.station
 
-        val nextPlayer = if (activePlayer == playerA) playerB else playerA
+            val nextPlayer = if (activePlayer == playerA) playerB else playerA
 
-        if (nextPlayer == playerA) fadeOutJobA?.cancel() else fadeOutJobB?.cancel()
+            if (nextPlayer == playerA) fadeOutJobA?.cancel() else fadeOutJobB?.cancel()
 
-        if (isManualSkip) {
-            fadeInJobA?.cancel()
-            fadeInJobB?.cancel()
-            activePlayer?.stop()
-            activePlayer?.clearMediaItems()
-            duckingForPlayer = null
-            duckedMusicPlayer = null
-        }
+            if (isManualSkip) {
+                fadeInJobA?.cancel()
+                fadeInJobB?.cancel()
+                activePlayer?.pause()
+                activePlayer?.clearMediaItems()
+                duckingForPlayer = null
+                duckedMusicPlayer = null
+            }
 
-        if (nextTrack.isNewsBlock) {
-            val chosenIntro = nextTrack.newsIntroOptions?.takeIf { it.isNotEmpty() }?.random()
-            val chosenOutro = nextTrack.newsOutroOptions?.takeIf { it.isNotEmpty() }?.random()
-            val newsPool = (nextTrack.newsItemOptions ?: emptyList()).shuffled()
-            val transitionPool = nextTrack.newsTransitionOptions ?: emptyList()
-            val endingPool = nextTrack.newsEndingOptions ?: emptyList()
+            // Title & Artist Resolution
+            val displayTitle: String
+            val displayArtist: String
 
-            val newsCount = if (newsPool.isEmpty()) 0 else Random.nextInt(1, 4).coerceAtMost(newsPool.size)
-            val chosenNews = newsPool.take(newsCount)
-
-            val middleSegments = mutableListOf<String>()
-            chosenNews.forEachIndexed { index, newsPath ->
-                middleSegments.add(newsPath)
-                val isLast = index == chosenNews.lastIndex
-                if (!isLast && transitionPool.isNotEmpty()) {
-                    middleSegments.add(transitionPool.random())
+            if (nextTrack.type == AudioType.MUSIC || nextTrack.filePath.contains("/music/")) {
+                if (nextTrack.title.contains("-")) {
+                    val parts = nextTrack.title.split("-", limit = 2)
+                    displayArtist = parts[0].trim()
+                    displayTitle = parts[1].trim()
+                } else {
+                    displayArtist = station?.name ?: "Rádio"
+                    displayTitle = nextTrack.title
                 }
+            } else {
+                displayTitle = nextTrack.title
+                displayArtist = station?.name ?: "Rádio"
             }
 
-            if (endingPool.isNotEmpty()) {
-                middleSegments.add(endingPool.random())
+            val extras = Bundle().apply {
+                putString("icon_path", station?.iconPath)
             }
 
-            val segmentPaths = mutableListOf<String>()
-            if (chosenIntro != null) segmentPaths.add(chosenIntro)
-            segmentPaths.addAll(middleSegments)
-            if (chosenOutro != null) segmentPaths.add(chosenOutro)
-
-            if (segmentPaths.isEmpty() && nextTrack.filePath.isNotEmpty()) {
-                segmentPaths.add(nextTrack.filePath)
-            }
-
-            val mediaItems = segmentPaths.mapIndexed { index, path ->
-                val metadata = MediaMetadata.Builder()
-                    .setTitle(nextTrack.title)
-                    .setArtist(station?.name)
-                    .setSubtitle(station?.frequency)
-                    .setArtworkData(artworkData, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
-                    .setExtras(extras)
-                    .build()
-
-                MediaItem.Builder()
-                    .setUri(assetUri(path))
-                    .setMediaId("${nextTrack.id}_newsblock_seg_$index")
-                    .setMediaMetadata(metadata)
-                    .build()
-            }
-
-            nextPlayer?.setMediaItems(mediaItems)
-            nextPlayer?.prepare()
-        } else if (nextTrack.isSpecialTrack) {
-            val chosenIntro = nextTrack.introOptions?.takeIf { it.isNotEmpty() }?.random()
-            val chosenOutro = nextTrack.outroOptions?.takeIf { it.isNotEmpty() }?.random()
-
-            val segmentPaths = mutableListOf<String>()
-            if (chosenIntro != null) segmentPaths.add(chosenIntro)
-            segmentPaths.addAll(nextTrack.midSegments ?: emptyList())
-            if (chosenOutro != null) segmentPaths.add(chosenOutro)
-
-            if (segmentPaths.isEmpty() && !nextTrack.filePath.isNullOrEmpty()) {
-                segmentPaths.add(nextTrack.filePath)
-            }
-
-            val mediaItems = segmentPaths.mapIndexed { index, path ->
-                val segmentMediaId = when (index) {
-                    0 -> "${nextTrack.id}_intro"
-                    segmentPaths.lastIndex -> "${nextTrack.id}_outro"
-                    else -> "${nextTrack.id}_mid_$index"
-                }
-
-                val metadata = MediaMetadata.Builder()
-                    .setTitle(nextTrack.title)
-                    .setArtist(station?.name)
-                    .setSubtitle(station?.frequency)
-                    .setArtworkData(artworkData, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
-                    .setExtras(extras)
-                    .build()
-
-                MediaItem.Builder()
-                    .setUri(assetUri(path))
-                    .setMediaId(segmentMediaId)
-                    .setMediaMetadata(metadata)
-                    .build()
-            }
-
-            nextPlayer?.setMediaItems(mediaItems)
-            nextPlayer?.prepare()
-        } else {
-            val trackUri = assetUri(nextTrack.filePath)
-
+            // Light metadata builder without heavy synchronous bitmap decoding
             val metadata = MediaMetadata.Builder()
-                .setTitle(nextTrack.title)
-                .setArtist(station?.name)
+                .setTitle(displayTitle)
+                .setArtist(displayArtist)
                 .setSubtitle(station?.frequency)
-                .setArtworkData(artworkData, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
                 .setExtras(extras)
                 .build()
 
-            val mediaItem = MediaItem.Builder()
-                .setUri(trackUri)
-                .setMediaId(nextTrack.id)
-                .setMediaMetadata(metadata)
-                .build()
+            // Prepare segment paths for special/segmented tracks or fallback to filePath
+            val hasSegments = nextTrack.isNewsBlock ||
+                    nextTrack.isSpecialTrack ||
+                    !nextTrack.midSegments.isNullOrEmpty() ||
+                    !nextTrack.introOptions.isNullOrEmpty()
 
-            nextPlayer?.setMediaItem(mediaItem)
-            nextPlayer?.prepare()
-        }
+            val segmentPaths = if (hasSegments) prepareSegmentPaths(nextTrack) else emptyList()
 
-        val isMusic = nextTrack.filePath.contains("/music/")
-        val isJingle = nextTrack.filePath.contains("/jingles/")
-
-        val isNoFadeType = nextTrack.isNewsBlock || nextTrack.filePath.contains("/radio_hello/") || nextTrack.id.contains("radiohello")
-
-        if (isNoFadeType) {
-            fadeInJobA?.cancel()
-            fadeInJobB?.cancel()
-            nextPlayer?.volume = newsAndHelloVolume
-        } else if (isJingle) {
-            nextPlayer?.volume = 0.0f
-            startFadeIn(nextPlayer, 1500L)
-        } else if (isMusic || isFirstTrackOfStation) {
-            nextPlayer?.volume = 0.0f
-            val musicFadeInMs = specialFadeInOverrideMs
-                ?: (if (nextTrack.isSpecialTrack) 1000L else 4000L)
-
-            if (duckToHalfVolume && !nextTrack.isSpecialTrack) {
-                duckedMusicPlayer = nextPlayer
-                startFadeIn(nextPlayer, musicFadeInMs, targetVolume = 0.5f)
+            // Queue MediaItems into target player directly on Main thread
+            if (segmentPaths.isNotEmpty()) {
+                val mediaItems = segmentPaths.mapIndexed { index, path ->
+                    val fileName = path.substringAfterLast("/")
+                    MediaItem.Builder()
+                        .setUri(assetUri(path))
+                        .setMediaId("${nextTrack.id}_seg_${index}_${fileName}")
+                        .setMediaMetadata(metadata)
+                        .build()
+                }
+                nextPlayer?.setMediaItems(mediaItems)
+            } else if (nextTrack.filePath.isNotBlank()) {
+                val mediaItem = MediaItem.Builder()
+                    .setUri(assetUri(nextTrack.filePath))
+                    .setMediaId(nextTrack.id)
+                    .setMediaMetadata(metadata)
+                    .build()
+                nextPlayer?.setMediaItem(mediaItem)
             } else {
-                startFadeIn(nextPlayer, musicFadeInMs)
+                Log.e("RadioMediaService", "Unable to play track ${nextTrack.id}: No valid file path or segments found.")
+                return
             }
+
+            nextPlayer?.prepare()
+
+            // Handle Volume Fades & Ducking
+            val isMusic = nextTrack.type == AudioType.MUSIC || nextTrack.filePath.contains("/music/")
+            val isJingle = nextTrack.type == AudioType.JINGLE || nextTrack.filePath.contains("/jingles/")
+            val isNoFadeType = nextTrack.isNewsBlock ||
+                    nextTrack.type == AudioType.RADIO_HELLO ||
+                    nextTrack.filePath.contains("/radio_hello/") ||
+                    nextTrack.id.contains("radiohello")
+
+            if (isNoFadeType) {
+                fadeInJobA?.cancel()
+                fadeInJobB?.cancel()
+                nextPlayer?.volume = newsAndHelloVolume
+            } else if (isJingle) {
+                nextPlayer?.volume = 0.0f
+                startFadeIn(nextPlayer, 1500L)
+            } else if (isMusic || isFirstTrackOfStation) {
+                nextPlayer?.volume = 0.0f
+                val musicFadeInMs = specialFadeInOverrideMs ?: (if (nextTrack.isSpecialTrack) 1000L else 4000L)
+                if (duckToHalfVolume && !nextTrack.isSpecialTrack) {
+                    duckedMusicPlayer = nextPlayer
+                    startFadeIn(nextPlayer, musicFadeInMs, targetVolume = 0.5f)
+                } else {
+                    startFadeIn(nextPlayer, musicFadeInMs)
+                }
+            } else {
+                fadeInJobA?.cancel()
+                fadeInJobB?.cancel()
+                nextPlayer?.volume = 1.0f
+            }
+
+            nextPlayer?.play()
+
+            // Safely assign active player and update session
+            activePlayer = nextPlayer
+            mediaSession?.player = getForwardingPlayer(activePlayer!!)
+
+        } finally {
+            isPreparingTrack = false
+        }
+    }
+
+    private fun prepareSegmentPaths(nextTrack: AudioTrack): List<String> {
+        val segmentPaths = mutableListOf<String>()
+
+        if (nextTrack.isNewsBlock) {
+            // Fallout News Block Logic...
+            val chosenIntro = nextTrack.newsIntroOptions?.filter { it.isNotBlank() }?.takeIf { it.isNotEmpty() }?.random()
+            if (chosenIntro != null) segmentPaths.add(chosenIntro)
+
+            val newsPool = (nextTrack.newsItemOptions ?: emptyList()).filter { it.isNotBlank() }.shuffled()
+            val transitionPool = (nextTrack.newsTransitionOptions ?: emptyList()).filter { it.isNotBlank() }
+
+            if (newsPool.isNotEmpty()) {
+                val newsCount = Random.nextInt(1, 4).coerceAtMost(newsPool.size)
+                val chosenNews = newsPool.take(newsCount)
+
+                chosenNews.forEachIndexed { index, newsPath ->
+                    segmentPaths.add(newsPath)
+                    val isLastNews = index == chosenNews.lastIndex
+                    if (!isLastNews && transitionPool.isNotEmpty()) {
+                        segmentPaths.add(transitionPool.random())
+                    }
+                }
+            }
+
+            val endingPool = (nextTrack.newsEndingOptions ?: emptyList()).filter { it.isNotBlank() }
+            val chosenEnding = endingPool.takeIf { it.isNotEmpty() }?.random()
+            if (chosenEnding != null) segmentPaths.add(chosenEnding)
+
+            val chosenOutro = nextTrack.newsOutroOptions?.filter { it.isNotBlank() }?.takeIf { it.isNotEmpty() }?.random()
+            if (chosenOutro != null) segmentPaths.add(chosenOutro)
+
         } else {
-            fadeInJobA?.cancel()
-            fadeInJobB?.cancel()
-            nextPlayer?.volume = 1.0f
+            // --- GTA-STYLE AUDIOTRACK (1 Intro -> Mid -> 1 Outro) ---
+
+            // 1. Pick 1 Intro if available
+            val chosenIntro = nextTrack.introOptions
+                ?.filter { it.isNotBlank() }
+                ?.takeIf { it.isNotEmpty() }
+                ?.random()
+            if (chosenIntro != null) {
+                segmentPaths.add(chosenIntro)
+            }
+
+            // 2. Add Mid segment(s) / Main song files
+            nextTrack.midSegments
+                ?.filter { it.isNotBlank() }
+                ?.let { midList ->
+                    segmentPaths.addAll(midList)
+                }
+
+            // 3. Pick 1 Outro if available
+            val chosenOutro = nextTrack.outroOptions
+                ?.filter { it.isNotBlank() }
+                ?.takeIf { it.isNotEmpty() }?.random()
+            if (chosenOutro != null) {
+                segmentPaths.add(chosenOutro)
+            }
         }
 
-        nextPlayer?.play()
+        // Fallback if segment list came up empty
+        if (segmentPaths.isEmpty() && nextTrack.filePath.isNotBlank()) {
+            segmentPaths.add(nextTrack.filePath)
+        }
 
-        activePlayer = nextPlayer
-        mediaSession?.player = getForwardingPlayer(activePlayer!!)
+        return segmentPaths
     }
 
     private fun startFadeIn(
@@ -777,13 +823,17 @@ class RadioMediaService : MediaSessionService() {
 
             override fun seekToNext() {
                 if (!isTuningTransition && playbackManager != null) {
-                    playNextTrack(isManualSkip = true)
+                    serviceScope.launch {
+                        playNextTrack(isManualSkip = true)
+                    }
                 }
             }
 
             override fun seekToNextMediaItem() {
                 if (!isTuningTransition && playbackManager != null) {
-                    playNextTrack(isManualSkip = true)
+                    serviceScope.launch {
+                        playNextTrack(isManualSkip = true)
+                    }
                 }
             }
         }

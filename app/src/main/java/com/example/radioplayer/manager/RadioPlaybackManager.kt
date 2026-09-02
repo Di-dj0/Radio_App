@@ -15,15 +15,14 @@ class RadioPlaybackManager(val station: RadioStation) {
     init {
         prepareNextSegment()
 
-        // Tuning effect: Pula aleatoriamente de 2 a 5 passos na fila inicial
-        val stepsToSkip = Random.nextInt(1, 7) // 1 a 6 passos, mais variação na sintonia
+        // Safely perform tuning skip on track items
+        val stepsToSkip = Random.nextInt(1, 5)
         repeat(stepsToSkip) {
             if (playbackQueue.isNotEmpty()) {
                 playbackQueue.removeAt(0)
             }
         }
 
-        // Caso o pulo tenha limpado a fila inteira, gera o bloco seguinte imediatamente
         if (playbackQueue.isEmpty()) {
             prepareNextSegment()
         }
@@ -40,20 +39,16 @@ class RadioPlaybackManager(val station: RadioStation) {
     }
 
     private fun prepareNextSegment() {
-        // [DJ 1] -> [Jingle] -> [DJ 2] -> (~30%)[Ad + DJ 3] -> [Música]
-        // Odds recebem um jitter aleatório a cada bloco para variar o ritmo
-        val djClosingChance = Random.nextFloat() * 0.20f + 0.40f   // 40%–60%
-        val adChance = Random.nextFloat() * 0.15f + 0.225f          // 22.5%–37.5%
+        val djClosingChance = Random.nextFloat() * 0.20f + 0.40f
+        val adChance = Random.nextFloat() * 0.15f + 0.225f
         val stationHasJingles = station.jingles.isNotEmpty()
 
-        // 1. DJ de encerramento
-        // Só entra se a rádio tiver jingle disponível: sem jingle, este DJ ficaria
-        // colado direto no DJ de introdução (2 arquivos do mesmo tipo em sequência).
+        // 1. DJ Closing
         if (stationHasJingles && station.djTalks.isNotEmpty() && Random.nextFloat() < djClosingChance) {
             drawDjTalk(requireShort = true)?.let { playbackQueue.add(it) }
         }
 
-        // 2. Vinheta / Jingle da rádio
+        // 2. Jingle
         if (stationHasJingles) {
             playbackQueue.add(unplayedJingles.removeAt(0))
             if (unplayedJingles.isEmpty()) {
@@ -61,26 +56,24 @@ class RadioPlaybackManager(val station: RadioStation) {
             }
         }
 
-        // 3. DJ de introdução (chama o próximo bloco)
+        // 3. DJ Intro
         if (station.djTalks.isNotEmpty()) {
             drawDjTalk(requireShort = true)?.let { playbackQueue.add(it) }
         }
 
-        // 4. Bloco de Comercial + DJ de Transição (30% de chance)
+        // 4. Ad Block
         if (station.ads.isNotEmpty() && Random.nextFloat() < adChance) {
-            // Comercial
             playbackQueue.add(unplayedAds.removeAt(0))
             if (unplayedAds.isEmpty()) {
                 unplayedAds = station.ads.shuffled().toMutableList()
             }
 
-            // DJ que fala em cima da música pós-comercial
             if (station.djTalks.isNotEmpty()) {
                 drawDjTalk(requireShort = true)?.let { playbackQueue.add(it) }
             }
         }
 
-        // 5. A nova música que vai rodar
+        // 5. Main Song / Track
         if (unplayedMusic.isEmpty()) {
             unplayedMusic = station.musicTracks.shuffled().toMutableList()
         }
@@ -88,11 +81,10 @@ class RadioPlaybackManager(val station: RadioStation) {
             playbackQueue.add(unplayedMusic.removeAt(0))
         }
 
-        // 6. Bloco de notícias (Fallout)
+        // 6. News Block (Fallout)
         station.newsTemplate?.let { newsTemplate ->
-            val newsChance = Random.nextFloat() * 0.25f + 0.50f // 50%–75%
+            val newsChance = Random.nextFloat() * 0.25f + 0.50f
             if (Random.nextFloat() < newsChance) {
-                // Sempre precede o bloco de notícias com um radio_hello
                 if (station.radioHellos.isNotEmpty()) {
                     playbackQueue.add(station.radioHellos.random())
                 }
@@ -108,7 +100,6 @@ class RadioPlaybackManager(val station: RadioStation) {
         check(playbackQueue.isNotEmpty()) {
             "Station '${station.name}' has no audio tracks to play."
         }
-        // Retorna o primeiro item sem dar um .removeAt(0)
         return playbackQueue.first()
     }
 
@@ -123,8 +114,6 @@ class RadioPlaybackManager(val station: RadioStation) {
 
         val chosen = pool.randomOrNull() ?: run {
             if (requireShort) {
-                // Nenhum DJ curto sobrou no pool embaralhado atual: procura de
-                // novo na lista completa da rádio antes de desistir dessa posição.
                 station.djTalks.filter { isShort(it) }.randomOrNull()
             } else {
                 unplayedDjTalks.randomOrNull()
@@ -137,5 +126,4 @@ class RadioPlaybackManager(val station: RadioStation) {
         }
         return chosen
     }
-
 }

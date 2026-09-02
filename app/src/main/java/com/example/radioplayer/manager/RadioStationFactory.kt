@@ -8,6 +8,8 @@ import com.example.radioplayer.models.RadioStation
 import java.io.IOException
 import org.json.JSONObject
 import android.media.MediaMetadataRetriever
+import com.example.radioplayer.models.GameColors
+import androidx.core.graphics.toColorInt
 
 object RadioStationFactory {
 
@@ -126,23 +128,35 @@ object RadioStationFactory {
         val files = assetManager.list(folderPath) ?: return null
         if (files.isEmpty()) return null
 
-        val introFiles = files.filter { it.contains("intro", ignoreCase = true) }
-        val outroFiles = files.filter { it.contains("outro", ignoreCase = true) }
-        val midFiles = files.filter {
-            !it.contains("intro", ignoreCase = true) && !it.contains("outro", ignoreCase = true)
+        // 1. Explicitly filter for intro, mid, and outro audio files
+        val introFiles = files.filter { fileName ->
+            val lower = fileName.lowercase()
+            lower.contains("intro") && lower.substringAfterLast(".", "") in AUDIO_EXTENSIONS
         }.sorted()
 
-        if (introFiles.isEmpty() || outroFiles.isEmpty() || midFiles.isEmpty()) {
-            println("Aviso: pasta de música especial '$folderName' incompleta (precisa de ao menos 1 intro, 1 mid e 1 outro). Ignorando.")
+        val midFiles = files.filter { fileName ->
+            val lower = fileName.lowercase()
+            lower.contains("mid") && lower.substringAfterLast(".", "") in AUDIO_EXTENSIONS
+        }.sorted()
+
+        val outroFiles = files.filter { fileName ->
+            val lower = fileName.lowercase()
+            lower.contains("outro") && lower.substringAfterLast(".", "") in AUDIO_EXTENSIONS
+        }.sorted()
+
+        // 2. Strict GTA Track Validation: MUST have at least 1 intro, 1 mid, AND 1 outro
+        if (introFiles.isEmpty() || midFiles.isEmpty() || outroFiles.isEmpty()) {
+            println("Aviso: pasta de música especial '$folderName' precisa ter arquivos intro_X, mid_X e outro_X. Ignorando track incompleta.")
             return null
         }
 
         val trackId = "${idPrefix}_music_${folderName.replace(" ", "_")}"
 
+        // 3. Map clean full asset paths relative to the asset root
         return AudioTrack(
             id = trackId,
-            title = folderName, // já vem no formato "Nome da Música - Artista"
-            filePath = "$folderPath/${midFiles.first()}", // referência/fallback, não usado na composição
+            title = folderName,
+            filePath = "$folderPath/${midFiles.first()}", // Fallback/reference path
             type = AudioType.MUSIC,
             introOptions = introFiles.map { "$folderPath/$it" },
             midSegments = midFiles.map { "$folderPath/$it" },
@@ -210,30 +224,30 @@ object RadioStationFactory {
     private fun buildNewsTemplate(assetManager: AssetManager, idPrefix: String, basePath: String): AudioTrack? {
         val newsPath = "$basePath/news"
         val files = assetManager.list(newsPath) ?: emptyArray()
-        if (files.isEmpty()) return null // Sem pasta news/ -> rádio não usa esse recurso (ex.: rádios GTA)
+        if (files.isEmpty()) return null
 
-        val introFiles = files.filter { it.contains("intro", ignoreCase = true) }
-        val outroFiles = files.filter { it.contains("outro", ignoreCase = true) }
-        val transitionFiles = files.filter { it.contains("transition", ignoreCase = true) }
-        val sponsorFiles = files.filter { it.contains("sponsor", ignoreCase = true) }
-        val endingFiles = files.filter { it.contains("ending", ignoreCase = true) }
+        val introFiles = files.filter { it.contains("intro", ignoreCase = true) }.sorted()
+        val outroFiles = files.filter { it.contains("outro", ignoreCase = true) }.sorted()
+        val transitionFiles = files.filter { it.contains("transition", ignoreCase = true) }.sorted()
+        val sponsorFiles = files.filter { it.contains("sponsor", ignoreCase = true) }.sorted()
+        val endingFiles = files.filter { it.contains("ending", ignoreCase = true) }.sorted()
+
         val newsItemFiles = files.filter { fileName ->
-            !fileName.contains("intro", ignoreCase = true) &&
-                    !fileName.contains("outro", ignoreCase = true) &&
-                    !fileName.contains("transition", ignoreCase = true) &&
-                    !fileName.contains("sponsor", ignoreCase = true) &&
-                    !fileName.contains("ending", ignoreCase = true)
-        }
+            val lower = fileName.lowercase()
+            lower.contains("news") || (!lower.contains("intro") &&
+                    !lower.contains("outro") &&
+                    !lower.contains("transition") &&
+                    !lower.contains("sponsor") &&
+                    !lower.contains("ending") &&
+                    lower.substringAfterLast(".", "") in AUDIO_EXTENSIONS)
+        }.sorted()
 
-        if (introFiles.isEmpty() || outroFiles.isEmpty() || newsItemFiles.isEmpty()) {
-            println("Aviso: pasta news/ em '$basePath' incompleta (precisa de ao menos 1 intro, 1 outro e 1 notícia). Bloco de notícias desativado pra essa rádio.")
-            return null
-        }
+        if (introFiles.isEmpty() || outroFiles.isEmpty() || newsItemFiles.isEmpty()) return null
 
         return AudioTrack(
             id = "${idPrefix}_newsblock",
             title = "Notícias",
-            filePath = "$newsPath/${newsItemFiles.first()}", // referência/fallback, não usado na composição
+            filePath = "$newsPath/${newsItemFiles.first()}",
             type = AudioType.NEWS_BLOCK,
             newsIntroOptions = introFiles.map { "$newsPath/$it" },
             newsItemOptions = newsItemFiles.map { "$newsPath/$it" },
@@ -281,6 +295,37 @@ object RadioStationFactory {
         } catch (e: Exception) {
             // Sem config.json, JSON malformado, ou qualquer outro problema -> fallback
             null
+        }
+    }
+
+    fun getGameColors(context: Context, gameFolder: String): GameColors {
+        val assetManager = context.assets
+        return try {
+            val configPath = "$gameFolder/general/config.json"
+            val jsonString = assetManager.open(configPath).bufferedReader().use { it.readText() }
+            val jsonObject = JSONObject(jsonString)
+
+            val textColor = jsonObject.optString("textColor", GameColors.DEFAULT_TEXT_COLOR)
+                .takeIf { isValidHexColor(it) } ?: GameColors.DEFAULT_TEXT_COLOR
+
+            val accentColor = jsonObject.optString("accentColor", GameColors.DEFAULT_ACCENT_COLOR)
+                .takeIf { isValidHexColor(it) } ?: GameColors.DEFAULT_ACCENT_COLOR
+
+            val selectorStyle = jsonObject.optString("stationSelectorStyle", GameColors.DEFAULT_SELECTOR_STYLE)
+                .takeIf { it == "radial" || it == "list" } ?: GameColors.DEFAULT_SELECTOR_STYLE
+
+            GameColors(textColorHex = textColor, accentColorHex = accentColor, stationSelectorStyle = selectorStyle)
+        } catch (e: Exception) {
+            GameColors()
+        }
+    }
+
+    private fun isValidHexColor(value: String): Boolean {
+        return try {
+            value.toColorInt()
+            true
+        } catch (e: Exception) {
+            false
         }
     }
 }
